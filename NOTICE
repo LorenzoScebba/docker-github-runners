@@ -1,0 +1,17 @@
+This project is a derivative of myoung34/docker-github-actions-runner
+(https://github.com/myoung34/docker-github-actions-runner), licensed under the
+GNU General Public License v3.0.
+
+The following runtime scripts are reused, largely verbatim, to preserve the
+exact environment-variable contract (ACCESS_TOKEN, APP_ID/APP_PRIVATE_KEY,
+RUNNER_SCOPE, ORG_NAME, RUNNER_NAME, RUNNER_LABELS, EPHEMERAL, ...) so this
+image remains a drop-in replacement:
+
+  * scripts/entrypoint.sh
+  * scripts/token.sh
+  * scripts/app_token.sh
+  * scripts/install_actions.sh (modified: adds checksum verification)
+
+The Dockerfile and scripts/install-tools.sh are original work whose purpose is
+to remove the vulnerability cluster present in the upstream image. See README
+"Security" for details.
