@@ -18,7 +18,6 @@ permissions:
 
 env:
   GH_RUNNER_VERSION: ${{ github.event.inputs.runner_version || '2.335.1' }}
-  IMAGE: ghcr.io/${{ github.repository }}
 
 jobs:
   build:
@@ -41,9 +40,12 @@ jobs:
       - name: Compute tags
         id: meta
         run: |
+          # Docker requires lowercase image refs; github.repository may have uppercase.
+          image="ghcr.io/${{ github.repository }}"
+          image="${image,,}"
           ver="${GH_RUNNER_VERSION}"
-          echo "tags=${IMAGE}:${ver}-ubuntu-noble,${IMAGE}:ubuntu-noble" >> "$GITHUB_OUTPUT"
-          echo "scan_tag=${IMAGE}:scan-${{ github.sha }}" >> "$GITHUB_OUTPUT"
+          echo "tags=${image}:${ver}-ubuntu-noble,${image}:ubuntu-noble" >> "$GITHUB_OUTPUT"
+          echo "scan_tag=${image}:scan-${{ github.sha }}" >> "$GITHUB_OUTPUT"
 
       # Build amd64 locally first so we can scan it before publishing.
       - name: Build (amd64, load for scan)
