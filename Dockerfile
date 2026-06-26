@@ -93,7 +93,7 @@ RUN INSTALL_CONTAINER_TOOLS="${INSTALL_CONTAINER_TOOLS}" \
 # ---------------------------------------------------------------------------
 RUN sed -e 's/Defaults.*env_reset/Defaults env_keep = "HTTP_PROXY HTTPS_PROXY NO_PROXY FTP_PROXY http_proxy https_proxy no_proxy ftp_proxy"/' -i /etc/sudoers \
   && echo '%sudo ALL=(ALL) NOPASSWD: ALL' >> /etc/sudoers \
-  && ( groupadd -g "${DOCKER_GID}" docker || groupadd docker ) \
+  && ( groupadd -g "${DOCKER_GID}" docker 2>/dev/null || groupmod -g "${DOCKER_GID}" docker ) \
   && ( groupadd -g "${RUNNER_GID}" runner || groupadd runner ) \
   && ( userdel -r ubuntu 2>/dev/null || true ) \
   && useradd -mr -d /home/runner -u "${RUNNER_UID}" -g runner runner \
