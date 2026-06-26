@@ -10,6 +10,8 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
+    permissions:
+      security-events: write
     steps:
       - uses: actions/checkout@v7
       - uses: docker/setup-qemu-action@v4
@@ -52,8 +54,14 @@ jobs:
           fail-build: true
           severity-cutoff: critical
           only-fixed: true
-          output-format: json
-          output-file: scan.json
+
+      - name: Inspect action SARIF report
+        run: cat ${{ steps.grype.outputs.sarif }}
+
+      - name: upload Anchore scan SARIF report
+        uses: github/codeql-action/upload-sarif@v4
+        with:
+          sarif_file: ${{ steps.grype.outputs.sarif }}
 
       - name: Push multi-arch image
         if: github.event_name != 'pull_request'
