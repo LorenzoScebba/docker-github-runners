@@ -13,7 +13,7 @@ How to upgrade the components baked into this image. Two categories:
 
 | Component                    | Where                                                                                                            | Default                    |
 |------------------------------|------------------------------------------------------------------------------------------------------------------|----------------------------|
-| GitHub Actions runner        | `GH_RUNNER_VERSION` in [`Dockerfile`](Dockerfile) + [`.github/workflows/build.yml`](.github/workflows/build.yml) | `2.335.1`                  |
+| GitHub Actions runner        | `GH_RUNNER_VERSION` in [`Dockerfile`](Dockerfile)                                                                | `2.335.1`                  |
 | git-lfs                      | `GIT_LFS_VERSION` in [`Dockerfile`](Dockerfile) (`gitlfs` stage)                                                 | `3.7.1`                    |
 | Ubuntu base                  | `FROM ubuntu:noble` in [`Dockerfile`](Dockerfile)                                                                | `noble` (24.04 LTS)        |
 | Go toolchain (git-lfs build) | `FROM golang:1` in [`Dockerfile`](Dockerfile) (`gitlfs` stage)                                                   | `golang:1` (latest stable) |
@@ -31,14 +31,10 @@ curl -fsSL -H 'Accept: application/vnd.github+json' \
   https://api.github.com/repos/actions/runner/releases/latest | jq -r '.tag_name'
 ```
 
-Then either:
-
-- **One-off build** — run the `build` workflow via *Actions → build → Run
-  workflow* and set the `runner_version` input. No code change needed.
-- **Change the default** — update the version in **both** places so manual
-  builds and the default agree:
-    - `ARG GH_RUNNER_VERSION="…"` in [`Dockerfile`](Dockerfile)
-    - `default: "…"` (and the `||` fallback) in [`.github/workflows/build.yml`](.github/workflows/build.yml)
+Update the single source of truth — `ARG GH_RUNNER_VERSION="…"` in
+[`Dockerfile`](Dockerfile) — then run the `build` workflow (*Actions → build →
+Run workflow*). The workflow reads the version straight out of the Dockerfile
+ARG to compute the image tags, so there's nothing else to keep in sync.
 
 The runner tarball's checksum is verified at build time (see
 [`scripts/install_actions.sh`](scripts/install_actions.sh)); no checksum to

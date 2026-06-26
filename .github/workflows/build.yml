@@ -2,18 +2,10 @@ name: build
 
 on:
   workflow_dispatch:
-    inputs:
-      runner_version:
-        description: GitHub Actions runner version
-        required: false
-        default: "2.335.1"
 
 permissions:
   contents: read
   packages: write
-
-env:
-  GH_RUNNER_VERSION: ${{ github.event.inputs.runner_version || '2.335.1' }}
 
 jobs:
   build:
@@ -31,13 +23,13 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Compute tags
+      - name: Compute version and tags
         id: meta
         run: |
-          # Docker requires lowercase image refs; github.repository may have uppercase.
+          ver="$(grep -oP 'ARG GH_RUNNER_VERSION="\K[^"]+' Dockerfile)"
+          [[ -n "$ver" ]] || { echo "::error::could not read GH_RUNNER_VERSION from Dockerfile"; exit 1; }
           image="ghcr.io/${{ github.repository }}"
           image="${image,,}"
-          ver="${GH_RUNNER_VERSION}"
           echo "tags=${image}:${ver}-ubuntu-noble,${image}:ubuntu-noble" >> "$GITHUB_OUTPUT"
           echo "scan_tag=${image}:scan-${{ github.sha }}" >> "$GITHUB_OUTPUT"
 
@@ -49,7 +41,6 @@ jobs:
           load: true
           platforms: linux/amd64
           build-args: |
-            GH_RUNNER_VERSION=${{ env.GH_RUNNER_VERSION }}
             INSTALL_CONTAINER_TOOLS=false
           tags: ${{ steps.meta.outputs.scan_tag }}
 
@@ -72,6 +63,5 @@ jobs:
           push: true
           platforms: linux/amd64,linux/arm64
           build-args: |
-            GH_RUNNER_VERSION=${{ env.GH_RUNNER_VERSION }}
             INSTALL_CONTAINER_TOOLS=false
           tags: ${{ steps.meta.outputs.tags }}
