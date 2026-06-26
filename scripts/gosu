@@ -1,0 +1,33 @@
+#!/bin/sh
+# Drop-in gosu replacement backed by setpriv (util-linux, pure C).
+#
+# The Ubuntu `gosu` apt package is a Go binary built against a stale Go stdlib
+# (go1.22.2) and is the single largest source of Critical/High CVEs in the
+# image (CVE-2024-24790, CVE-2025-22871, GO-2024-2887, ...). setpriv gives the
+# same "switch user, init supplementary groups, exec" behaviour with no Go.
+#
+# Supports the only form the entrypoint uses: `gosu user[:group] command [args]`.
+set -eu
+
+if [ "$#" -eq 0 ]; then
+  echo "usage: gosu user[:group] command [args...]" >&2
+  exit 1
+fi
+
+spec="$1"; shift
+user="${spec%%:*}"
+group=""
+case "$spec" in
+  *:*) group="${spec#*:}" ;;
+esac
+
+uid="$(id -u "$user")"
+if [ -n "$group" ]; then
+  gid="$(getent group "$group" | cut -d: -f3)"
+  [ -z "$gid" ] && gid="$group"   # allow a numeric gid
+else
+  gid="$(id -g "$user")"
+fi
+
+# --init-groups sets the supplementary groups for the target user, matching gosu.
+exec setpriv --reuid "$uid" --regid "$gid" --init-groups -- "$@"

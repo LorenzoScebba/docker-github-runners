@@ -74,8 +74,12 @@ jobs:
           jq -r '[.matches[]|select(.vulnerability.severity=="Critical")|.vulnerability.id]|unique|.[]' scan.json
           echo "Distinct High CVEs:"
           jq -r '[.matches[]|select(.vulnerability.severity=="High")|.vulnerability.id]|unique|.[]' scan.json
-          # These must NOT reappear — they are the snapd/podman/CNI Go-stdlib cluster.
-          forbidden="CVE-2024-24790 CVE-2025-22871 GHSA-p77j-4mvh-x3m3"
+          # Regression guard for the cluster we eliminated:
+          #   gosu stale-Go (replaced by setpriv shim): CVE-2024-24790 CVE-2025-22871 GO-2024-2887 GO-2025-3563
+          #   containerd grpc (daemon not installed):   GHSA-p77j-4mvh-x3m3
+          #   git-lfs stale-Go (compiled from source):  CVE-2025-68121 CVE-2026-27143 GO-2026-4337
+          # CVE-2026-6100 (aws-cli bundled python) is the one accepted residual — no upstream fix.
+          forbidden="CVE-2024-24790 CVE-2025-22871 GO-2024-2887 GO-2025-3563 GHSA-p77j-4mvh-x3m3 CVE-2025-68121 CVE-2026-27143 GO-2026-4337"
           found=""
           for cve in $forbidden; do
             if jq -e --arg c "$cve" 'any(.matches[]; .vulnerability.id==$c)' scan.json >/dev/null; then

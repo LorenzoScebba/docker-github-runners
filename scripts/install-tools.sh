@@ -2,21 +2,26 @@
 #
 # Install the runner toolchain on top of an upgraded Ubuntu base.
 #
-# Security posture (see README "Security" section):
+# Security posture (see README "Security" section). Every CVE decision below is
+# backed by grype attribution of the actual binaries, not assumptions:
 #   * The caller is expected to have already run `apt-get upgrade -y` so the
 #     OS-package CVE tail is closed.
-#   * Docker comes from Docker's official repo (kept current upstream), not the
-#     Ubuntu-universe container stack.
-#   * podman / buildah / skopeo / CNI plugins are NOT installed unless
-#     INSTALL_CONTAINER_TOOLS=true. Those Ubuntu-universe binaries are compiled
-#     against a stale Go stdlib and are the dominant source of Critical/High
-#     CVEs in the upstream image. Leaving them out is the single biggest win.
-#   * snapd is purged; CI runners never need it and it drags in a large Go
-#     binary surface.
+#   * Docker CLI + buildx + compose are installed by default. The Docker DAEMON
+#     and containerd.io are NOT, unless INSTALL_DOCKER_DAEMON=true: containerd's
+#     binaries (containerd/ctr/shim) embed grpc v1.78.0 (GHSA-p77j-4mvh-x3m3).
+#     Runners that mount the host /var/run/docker.sock only need the CLI.
+#   * podman / buildah / skopeo / CNI plugins only when INSTALL_CONTAINER_TOOLS
+#     =true (stale-Go Ubuntu-universe binaries).
+#   * git-lfs is NOT installed here — it is compiled from source with a current
+#     Go in the Dockerfile's `gitlfs` stage (the upstream release binary carries
+#     stale-Go stdlib CVEs).
+#   * snapd is purged; gosu is replaced by a setpriv shim (both stale Go) — see
+#     the Dockerfile.
 #
 set -euo pipefail
 
 INSTALL_CONTAINER_TOOLS="${INSTALL_CONTAINER_TOOLS:-false}"
+INSTALL_DOCKER_DAEMON="${INSTALL_DOCKER_DAEMON:-false}"
 INSTALL_POWERSHELL="${INSTALL_POWERSHELL:-true}"
 
 DPKG_ARCH="$(dpkg --print-architecture)"
@@ -36,7 +41,7 @@ configure_sources() {
   echo "deb [signed-by=/usr/share/keyrings/git-core.gpg] https://ppa.launchpadcontent.net/git-core/ppa/ubuntu ${VERSION_CODENAME} main" \
     > /etc/apt/sources.list.d/git-core.list
 
-  # Docker CE official repo (current Go, kept patched by Docker)
+  # Docker CE official repo
   curl -fsSL "https://download.docker.com/linux/${ID}/gpg" | gpg --dearmor -o /etc/apt/keyrings/docker.gpg
   echo "deb [arch=${DPKG_ARCH} signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/${ID} ${VERSION_CODENAME} stable" \
     > /etc/apt/sources.list.d/docker.list
@@ -45,28 +50,27 @@ configure_sources() {
 }
 
 install_docker() {
+  # CLI + buildx + compose are clean Go (no flagged stdlib/grpc) and are all a
+  # host-socket runner needs.
   apt-get install -y --no-install-recommends \
-    docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+    docker-ce-cli docker-buildx-plugin docker-compose-plugin
+
+  # The daemon + containerd.io carry the grpc CVE; only add them for dind.
+  if [[ "${INSTALL_DOCKER_DAEMON}" == "true" ]]; then
+    echo "INSTALL_DOCKER_DAEMON=true -> adding dockerd + containerd.io (containerd embeds grpc; see README)"
+    apt-get install -y --no-install-recommends docker-ce containerd.io
+    # Avoid the hard ulimit bump that fails inside unprivileged containers.
+    [[ -f /etc/init.d/docker ]] && sed -i 's/ulimit -Hn/# ulimit -Hn/g' /etc/init.d/docker
+  fi
 
   # Provide the classic `docker-compose` shim expected by some workflows.
   printf '#!/bin/sh\ndocker compose --compatibility "$@"\n' > /usr/local/bin/docker-compose
   chmod +x /usr/local/bin/docker-compose
-
-  # Avoid the hard ulimit bump that fails inside unprivileged containers.
-  [[ -f /etc/init.d/docker ]] && sed -i 's/ulimit -Hn/# ulimit -Hn/g' /etc/init.d/docker
 }
 
 install_git() {
+  # git-lfs is built from source in the Dockerfile's `gitlfs` stage.
   apt-get install -y --no-install-recommends git
-
-  # git-lfs (latest release tarball, arch-matched)
-  local ver
-  ver="$(curl -fsSL -H 'Accept: application/vnd.github+json' \
-    https://api.github.com/repos/git-lfs/git-lfs/releases/latest | jq -r '.tag_name' | sed 's/^v//')"
-  curl -fsSL "https://github.com/git-lfs/git-lfs/releases/download/v${ver}/git-lfs-linux-${DPKG_ARCH}-v${ver}.tar.gz" -o /tmp/lfs.tar.gz
-  tar -xzf /tmp/lfs.tar.gz -C /tmp
-  "/tmp/git-lfs-${ver}/install.sh"
-  rm -rf /tmp/lfs.tar.gz "/tmp/git-lfs-${ver}"
 }
 
 install_github_cli() {

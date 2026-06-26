@@ -2,8 +2,27 @@
 #
 # Hardened, drop-in replacement for myoung34/github-runner:<ver>-ubuntu-noble.
 # Same entrypoint/env-var contract; the difference is in what gets shipped and
-# patched. See README "Security" for the CVE rationale behind each decision.
+# patched. See README for the grype-verified CVE rationale behind each decision.
 #
+# ---------------------------------------------------------------------------
+# git-lfs builder. The upstream git-lfs RELEASE binary is built against a Go
+# (go1.25.3) that still carries the newest 2026 stdlib CVEs (CVE-2025-68121,
+# CVE-2026-27143, GO-2026-4337) — fixes exist in Go but no rebuilt git-lfs
+# release ships them yet. So we compile git-lfs ourselves with a current Go.
+# Runs native on the build host and cross-compiles to the target arch (pure
+# Go, CGO off) — no QEMU.
+# ---------------------------------------------------------------------------
+FROM --platform=$BUILDPLATFORM golang:1 AS gitlfs
+ARG GIT_LFS_VERSION="3.7.1"
+ARG TARGETOS
+ARG TARGETARCH
+ENV CGO_ENABLED=0
+RUN GOOS="${TARGETOS}" GOARCH="${TARGETARCH}" \
+      go install "github.com/git-lfs/git-lfs/v3@v${GIT_LFS_VERSION}" \
+  && mkdir -p /out \
+  && cp "$(find /go/bin -name git-lfs -type f | head -1)" /out/git-lfs
+
+# ---------------------------------------------------------------------------
 FROM ubuntu:noble
 
 LABEL org.opencontainers.image.title="hardened-github-runner" \
@@ -24,7 +43,13 @@ SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 ARG GH_RUNNER_VERSION="2.335.1"
 ARG TARGETPLATFORM
 
-# Build knobs. Container tooling is OFF by default — see install-tools.sh.
+# Build knobs (CVE-driven defaults — see install-tools.sh and README).
+#   INSTALL_DOCKER_DAEMON: adds dockerd + containerd.io for docker-in-docker.
+#     OFF by default — containerd embeds the grpc CVE and host-socket runners
+#     don't need it.
+#   INSTALL_CONTAINER_TOOLS: podman/buildah/skopeo/CNI (stale-Go). OFF.
+# git-lfs is always included, compiled from source in the `gitlfs` stage above.
+ARG INSTALL_DOCKER_DAEMON="false"
 ARG INSTALL_CONTAINER_TOOLS="false"
 ARG INSTALL_POWERSHELL="true"
 
@@ -49,7 +74,6 @@ RUN echo "en_US.UTF-8 UTF-8" >> /etc/locale.gen \
        dumb-init \
        gettext \
        gnupg \
-       gosu \
        gpg-agent \
        inetutils-ping \
        jq \
@@ -70,6 +94,7 @@ RUN echo "en_US.UTF-8 UTF-8" >> /etc/locale.gen \
        sudo \
        tar \
        unzip \
+       util-linux \
        wget \
        zip \
        zlib1g-dev \
@@ -78,15 +103,28 @@ RUN echo "en_US.UTF-8 UTF-8" >> /etc/locale.gen \
   && ( apt-get purge -y --auto-remove snapd 2>/dev/null || true ) \
   && rm -rf /var/lib/snapd /snap
 
+# Replace gosu (stale-Go binary, dominant CVE source) with a setpriv shim that
+# preserves its "switch user + init groups + exec" behaviour. The apt gosu is
+# intentionally never installed; this shim takes its canonical path so
+# entrypoint.sh (`/usr/sbin/gosu runner ...`) works unchanged.
+COPY --chmod=0755 scripts/gosu /usr/sbin/gosu
+RUN apt-get purge -y gosu 2>/dev/null || true
+
 # ---------------------------------------------------------------------------
-# 3. Toolchain: Docker CE (current upstream Go), git, gh, yq, aws, powershell.
-#    Container tooling (podman/buildah/skopeo/CNI) only when explicitly opted in.
+# 3. Toolchain: Docker CLI + buildx + compose, git, gh, yq, aws, powershell.
+#    Docker daemon / container tooling / git-lfs gated — see install-tools.sh.
 # ---------------------------------------------------------------------------
 COPY scripts/install-tools.sh /tmp/install-tools.sh
-RUN INSTALL_CONTAINER_TOOLS="${INSTALL_CONTAINER_TOOLS}" \
+RUN INSTALL_DOCKER_DAEMON="${INSTALL_DOCKER_DAEMON}" \
+    INSTALL_CONTAINER_TOOLS="${INSTALL_CONTAINER_TOOLS}" \
     INSTALL_POWERSHELL="${INSTALL_POWERSHELL}" \
     /tmp/install-tools.sh \
   && rm -f /tmp/install-tools.sh
+
+# git-lfs compiled with a current Go (see the `gitlfs` stage). Configure the
+# system-wide smudge/clean filters so `git clone` of LFS repos works.
+COPY --from=gitlfs /out/git-lfs /usr/local/bin/git-lfs
+RUN git-lfs install --system --skip-repo
 
 # ---------------------------------------------------------------------------
 # 4. Users and sudoers
