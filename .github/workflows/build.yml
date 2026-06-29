@@ -47,8 +47,6 @@ jobs:
           build-args: |
             INSTALL_CONTAINER_TOOLS=false
           tags: ${{ steps.meta.outputs.scan_tag }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
 
       - name: Scan with grype (distinct CVEs)
         uses: anchore/scan-action@v7
@@ -86,5 +84,3 @@ jobs:
           build-args: |
             INSTALL_CONTAINER_TOOLS=false
           tags: ${{ steps.meta.outputs.tags }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
