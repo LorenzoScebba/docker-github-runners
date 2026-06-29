@@ -23,6 +23,7 @@ set -euo pipefail
 INSTALL_CONTAINER_TOOLS="${INSTALL_CONTAINER_TOOLS:-false}"
 INSTALL_DOCKER_DAEMON="${INSTALL_DOCKER_DAEMON:-false}"
 INSTALL_POWERSHELL="${INSTALL_POWERSHELL:-true}"
+KUBECTL_MINOR_VERSION="${KUBECTL_MINOR_VERSION:-1.35}"
 
 DPKG_ARCH="$(dpkg --print-architecture)"
 
@@ -45,6 +46,18 @@ configure_sources() {
   curl -fsSL "https://download.docker.com/linux/${ID}/gpg" | gpg --dearmor -o /etc/apt/keyrings/docker.gpg
   echo "deb [arch=${DPKG_ARCH} signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/${ID} ${VERSION_CODENAME} stable" \
     > /etc/apt/sources.list.d/docker.list
+
+  # Kubernetes repo (kubectl)
+  curl -fsSL "https://pkgs.k8s.io/core:/stable:/v${KUBECTL_MINOR_VERSION}/deb/Release.key" \
+    | gpg --dearmor -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg
+  echo "deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/v${KUBECTL_MINOR_VERSION}/deb/ /" \
+    > /etc/apt/sources.list.d/kubernetes.list
+
+  # Helm repo
+  curl -fsSL https://packages.buildkite.com/helm-linux/helm-debian/gpgkey \
+    | gpg --dearmor -o /usr/share/keyrings/helm.gpg
+  echo "deb [signed-by=/usr/share/keyrings/helm.gpg] https://packages.buildkite.com/helm-linux/helm-debian/any/ any main" \
+    > /etc/apt/sources.list.d/helm-stable-debian.list
 
   apt-get update
 }
@@ -120,6 +133,18 @@ install_powershell() {
   rm -f /tmp/powershell.tar.gz
 }
 
+install_kubectl() {
+  apt-get install -y --no-install-recommends kubectl
+}
+
+install_helm() {
+  apt-get install -y --no-install-recommends helm
+}
+
+install_yarn() {
+  npm install -g yarn
+}
+
 # OPT-IN ONLY: the Ubuntu-universe container stack. These carry the stale-Go
 # CVE cluster the upstream image is flagged for. Documented in README.
 install_container_tools() {
@@ -135,12 +160,17 @@ main() {
   install_github_cli
   install_yq
   install_aws_cli
+  install_kubectl
+  install_helm
+  install_yarn
   [[ "${INSTALL_POWERSHELL}" == "true" ]] && install_powershell
   [[ "${INSTALL_CONTAINER_TOOLS}" == "true" ]] && install_container_tools
 
   # Repo lists are removed by the Dockerfile after this script, alongside the
   # final cache cleanup.
-  rm -f /etc/apt/sources.list.d/git-core.list
+  rm -f /etc/apt/sources.list.d/git-core.list \
+        /etc/apt/sources.list.d/kubernetes.list \
+        /etc/apt/sources.list.d/helm-stable-debian.list
 }
 
 main "$@"

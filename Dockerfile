@@ -52,6 +52,7 @@ ARG TARGETPLATFORM
 ARG INSTALL_DOCKER_DAEMON="false"
 ARG INSTALL_CONTAINER_TOOLS="false"
 ARG INSTALL_POWERSHELL="true"
+ARG KUBECTL_MINOR_VERSION="1.35"
 
 ARG RUNNER_UID="1001"
 ARG RUNNER_GID="121"
@@ -67,9 +68,11 @@ RUN echo "en_US.UTF-8 UTF-8" >> /etc/locale.gen \
   && apt-get upgrade -y \
   && apt-get install -y --no-install-recommends \
        apt-transport-https \
+       bc \
        build-essential \
        ca-certificates \
        curl \
+       default-jdk \
        dirmngr \
        dumb-init \
        gettext \
@@ -84,6 +87,7 @@ RUN echo "en_US.UTF-8 UTF-8" >> /etc/locale.gen \
        locales \
        lsb-release \
        nodejs \
+       npm \
        openssh-client \
        pkg-config \
        python3 \
@@ -99,9 +103,20 @@ RUN echo "en_US.UTF-8 UTF-8" >> /etc/locale.gen \
        zip \
        zlib1g-dev \
        zstd \
+       libgtk-3-0t64 \
+       libgbm-dev \
+       libnotify-dev \
+       libnss3 \
+       libxss1 \
+       libasound2t64 \
+       libxtst6 \
+       xauth \
+       xvfb \
+       chromium \
   && locale-gen \
   && ( apt-get purge -y --auto-remove snapd 2>/dev/null || true ) \
-  && rm -rf /var/lib/snapd /snap
+  && rm -rf /var/lib/snapd /snap \
+  && printf '[global]\nbreak-system-packages = true\n' > /etc/pip.conf
 
 # Replace gosu (stale-Go binary, dominant CVE source) with a setpriv shim that
 # preserves its "switch user + init groups + exec" behaviour. The apt gosu is
@@ -118,6 +133,7 @@ COPY scripts/install-tools.sh /tmp/install-tools.sh
 RUN INSTALL_DOCKER_DAEMON="${INSTALL_DOCKER_DAEMON}" \
     INSTALL_CONTAINER_TOOLS="${INSTALL_CONTAINER_TOOLS}" \
     INSTALL_POWERSHELL="${INSTALL_POWERSHELL}" \
+    KUBECTL_MINOR_VERSION="${KUBECTL_MINOR_VERSION}" \
     /tmp/install-tools.sh \
   && rm -f /tmp/install-tools.sh
 
