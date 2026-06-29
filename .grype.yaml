@@ -1,0 +1,15 @@
+# Grype configuration, consumed by the CI scan (anchore/scan-action, which
+# auto-detects this file at the repo root).
+#
+# Ignore rules here are NOT blanket suppressions — each one is a critical/fixable
+# finding that cannot be remediated yet and is tracked in the README
+# "CVEs left unfixed" table. Re-audit on every version bump (see UPDATING.md).
+ignore:
+  # kubectl ships a vulnerable golang.org/x/net (idna confusion, GO-2026-5026,
+  # fixed in x/net v0.55.0). No kubernetes release carries the bump yet — even
+  # v1.36.2 pins x/net v0.49.0 — and building kubectl from source with a forced
+  # bump is impractical. helm and git-lfs already ship the fixed x/net, so this
+  # rule only matches the kubectl binary. Drop it once k8s bumps x/net >= 0.55.0.
+  - vulnerability: GO-2026-5026
+    package:
+      name: golang.org/x/net

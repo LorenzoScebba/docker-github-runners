@@ -15,6 +15,10 @@ How to upgrade the components baked into this image. Two categories:
 |------------------------------|------------------------------------------------------------------------------------------------------------------|----------------------------|
 | GitHub Actions runner        | `GH_RUNNER_VERSION` in [`Dockerfile`](Dockerfile)                                                                | `2.335.1`                  |
 | git-lfs                      | `GIT_LFS_VERSION` in [`Dockerfile`](Dockerfile) (`gitlfs` stage)                                                 | `3.7.1`                    |
+| git-lfs `x/net` / `x/crypto` | `GO_X_NET_VERSION` / `GO_X_CRYPTO_VERSION` in [`Dockerfile`](Dockerfile) (`gitlfs` stage)                        | `v0.55.0` / `v0.53.0`      |
+| helm                         | `HELM_VERSION` in [`Dockerfile`](Dockerfile)                                                                     | `3.21.2`                   |
+| Node.js (major)              | `NODE_MAJOR` in [`Dockerfile`](Dockerfile) (NodeSource repo)                                                     | `24` (LTS)                 |
+| kubectl (minor)              | `KUBECTL_MINOR_VERSION` in [`Dockerfile`](Dockerfile)                                                            | `1.35`                     |
 | Ubuntu base                  | `FROM ubuntu:noble` in [`Dockerfile`](Dockerfile)                                                                | `noble` (24.04 LTS)        |
 | Go toolchain (git-lfs build) | `FROM golang:1` in [`Dockerfile`](Dockerfile) (`gitlfs` stage)                                                   | `golang:1` (latest stable) |
 | CI action versions           | `uses:` lines in [`.github/workflows/build.yml`](.github/workflows/build.yml)                                    | `@v4`/`@v7`                |
@@ -50,6 +54,45 @@ curl -fsSL https://api.github.com/repos/git-lfs/git-lfs/releases/latest | jq -r 
 ```
 
 Update `ARG GIT_LFS_VERSION="…"` in the `gitlfs` stage of [`Dockerfile`](Dockerfile).
+
+The `gitlfs` stage also force-upgrades `golang.org/x/net` and
+`golang.org/x/crypto` (`GO_X_NET_VERSION` / `GO_X_CRYPTO_VERSION`) because the
+git-lfs source tag still pins versions carrying the 2026 `x/net`/`x/crypto`
+critical batch (`GO-2026-5005..5026`). When a git-lfs release ships go.mod deps
+at or above these, the `go get` is a harmless no-op; bump the pins if a newer
+advisory raises the fixed floor.
+
+### helm version
+
+helm is pulled from the official `get.helm.sh` release binary, **not** the
+buildkite apt repo (which lags and ships a helm built against the vulnerable
+`x/net`/`x/crypto`). To bump, set `ARG HELM_VERSION="…"` in
+[`Dockerfile`](Dockerfile). Find the latest 3.x:
+
+```bash
+curl -fsSL https://api.github.com/repos/helm/helm/releases \
+  | jq -r '[.[].tag_name | select(startswith("v3."))][0]'
+```
+
+Staying on helm 3.x avoids the helm 4 breaking changes. The release floor for
+the `GO-2026-5005..5026` fix is `3.21.2`.
+
+### Node.js (NodeSource)
+
+Node.js + npm come from the NodeSource apt repo, **not** Ubuntu's apt `npm`
+(which drags in a stale Debian node-* tree — `handlebars` / `node-babel7` — that
+carries critical CVEs). `NODE_MAJOR` in [`Dockerfile`](Dockerfile) selects the
+Node major line (default `24` LTS); within that major a rebuild auto-refreshes
+to the newest patch.
+
+### kubectl and the `.grype.yaml` ignore
+
+kubectl is installed from the kubernetes apt repo at the `KUBECTL_MINOR_VERSION`
+minor line (auto-refreshed to the newest patch on rebuild). Its only Critical,
+`GO-2026-5026` (`x/net/idna`), has no remediation path — no k8s release ships
+`x/net` ≥ `v0.55.0` yet — so it is ignored in [`.grype.yaml`](.grype.yaml).
+**Re-audit that ignore on every rebuild:** once a kubernetes release bundles the
+fixed `x/net`, bump `KUBECTL_MINOR_VERSION` and delete the ignore rule.
 
 ### Go toolchain (for the git-lfs build)
 

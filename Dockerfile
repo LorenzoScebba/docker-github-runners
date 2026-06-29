@@ -11,16 +11,26 @@
 # release ships them yet. So we compile git-lfs ourselves with a current Go.
 # Runs native on the build host and cross-compiles to the target arch (pure
 # Go, CGO off) — no QEMU.
+#
+# We also force-upgrade golang.org/x/net and golang.org/x/crypto: git-lfs
+# v3.7.1's go.mod pins x/net v0.38.0 / x/crypto v0.36.0, which carry the 2026
+# critical advisory batch (GO-2026-5005..5026, idna/ssh). main has the bump but
+# no tagged release ships it, so we `go get` the fixed versions before building.
 # ---------------------------------------------------------------------------
 FROM --platform=$BUILDPLATFORM golang:1 AS gitlfs
 ARG GIT_LFS_VERSION="3.7.1"
+ARG GO_X_NET_VERSION="v0.55.0"
+ARG GO_X_CRYPTO_VERSION="v0.53.0"
 ARG TARGETOS
 ARG TARGETARCH
 ENV CGO_ENABLED=0
-RUN GOOS="${TARGETOS}" GOARCH="${TARGETARCH}" \
-      go install "github.com/git-lfs/git-lfs/v3@v${GIT_LFS_VERSION}" \
-  && mkdir -p /out \
-  && cp "$(find /go/bin -name git-lfs -type f | head -1)" /out/git-lfs
+RUN git clone --depth 1 --branch "v${GIT_LFS_VERSION}" \
+      https://github.com/git-lfs/git-lfs.git /src
+WORKDIR /src
+RUN go get "golang.org/x/net@${GO_X_NET_VERSION}" "golang.org/x/crypto@${GO_X_CRYPTO_VERSION}" \
+  && go mod tidy
+RUN mkdir -p /out \
+  && GOOS="${TARGETOS}" GOARCH="${TARGETARCH}" go build -o /out/git-lfs .
 
 # ---------------------------------------------------------------------------
 FROM ubuntu:noble
@@ -53,6 +63,12 @@ ARG INSTALL_DOCKER_DAEMON="false"
 ARG INSTALL_CONTAINER_TOOLS="false"
 ARG INSTALL_POWERSHELL="true"
 ARG KUBECTL_MINOR_VERSION="1.35"
+# helm is pulled from the official get.helm.sh release (the buildkite apt repo
+# lags and ships a helm built against the vulnerable x/net/x/crypto). 3.21.2 is
+# the first helm 3.x with the fixed deps. Node.js comes from NodeSource — the
+# Ubuntu apt npm drags in a stale Debian node-* tree (handlebars/babel CVEs).
+ARG HELM_VERSION="3.21.2"
+ARG NODE_MAJOR="24"
 
 ARG RUNNER_UID="1001"
 ARG RUNNER_GID="121"
@@ -86,8 +102,6 @@ RUN echo "en_US.UTF-8 UTF-8" >> /etc/locale.gen \
        libyaml-dev \
        locales \
        lsb-release \
-       nodejs \
-       npm \
        openssh-client \
        pkg-config \
        python3 \
@@ -134,6 +148,8 @@ RUN INSTALL_DOCKER_DAEMON="${INSTALL_DOCKER_DAEMON}" \
     INSTALL_CONTAINER_TOOLS="${INSTALL_CONTAINER_TOOLS}" \
     INSTALL_POWERSHELL="${INSTALL_POWERSHELL}" \
     KUBECTL_MINOR_VERSION="${KUBECTL_MINOR_VERSION}" \
+    HELM_VERSION="${HELM_VERSION}" \
+    NODE_MAJOR="${NODE_MAJOR}" \
     /tmp/install-tools.sh \
   && rm -f /tmp/install-tools.sh
 

@@ -34,25 +34,31 @@ There are no unit tests — correctness is validated by `grype` scan and the CI 
 ### Two-stage Dockerfile
 
 The `gitlfs` stage (`--platform=$BUILDPLATFORM`) builds git-lfs from source against a current Go toolchain, cross-compiling with `GOOS`/`GOARCH` (CGO off, no
-QEMU). The upstream release binary ships a stale Go that carries the 2026 stdlib CVE cluster; rebuilding from source eliminates them.
+QEMU). The upstream release binary ships a stale Go that carries the 2026 stdlib CVE cluster; rebuilding from source eliminates them. The stage also clones the
+git-lfs tag (rather than `go install`-ing it) so it can `go get` forced upgrades of `golang.org/x/net` and `golang.org/x/crypto` — the source tag still pins
+versions carrying the 2026 `x/net`/`x/crypto` critical batch (`GO-2026-5005..5026`).
 
 The `ubuntu:noble` final stage:
 
 1. `apt-get upgrade -y` (runs **before** any tool install — closes OS CVE tail)
 2. Copies `scripts/gosu` shim (replaces the stale-Go apt `gosu` package; uses `setpriv` from util-linux)
-3. Runs `scripts/install-tools.sh` (Docker CLI, git, gh, yq, aws-cli, powershell)
+3. Runs `scripts/install-tools.sh` (Docker CLI, git, gh, yq, aws-cli, powershell, kubectl, helm, Node.js). helm comes from the official `get.helm.sh` release (
+   not the lagging buildkite apt repo); Node.js + npm come from NodeSource (not Ubuntu apt, which drags in a stale Debian node-* tree).
 4. Copies git-lfs from the builder stage
 5. Installs the runner tarball via `scripts/install_actions.sh`
 6. Copies `entrypoint.sh`, `token.sh`, `app_token.sh` verbatim from upstream
 
 ### Key security decisions (and why they're where they are)
 
-| Decision                                                 | Location                         | CVE(s) eliminated                                          |
-|----------------------------------------------------------|----------------------------------|------------------------------------------------------------|
-| `gosu` → `setpriv` shim                                  | `scripts/gosu` + Dockerfile L110 | CVE-2024-24790, CVE-2025-22871, GO-2024-2887, GO-2025-3563 |
-| Docker daemon opt-in (`INSTALL_DOCKER_DAEMON=false`)     | `scripts/install-tools.sh:59`    | GHSA-p77j-4mvh-x3m3 (grpc in containerd.io)                |
-| git-lfs source build                                     | `gitlfs` stage                   | CVE-2025-68121, CVE-2026-27143, GO-2026-4337               |
-| Container tools opt-in (`INSTALL_CONTAINER_TOOLS=false`) | `scripts/install-tools.sh:127`   | stale-Go Ubuntu-universe binaries                          |
+| Decision                                                 | Location                          | CVE(s) eliminated                                                |
+|----------------------------------------------------------|-----------------------------------|------------------------------------------------------------------|
+| `gosu` → `setpriv` shim                                  | `scripts/gosu` + Dockerfile       | CVE-2024-24790, CVE-2025-22871, GO-2024-2887, GO-2025-3563       |
+| Docker daemon opt-in (`INSTALL_DOCKER_DAEMON=false`)     | `scripts/install-tools.sh`        | GHSA-p77j-4mvh-x3m3 (grpc in containerd.io)                      |
+| git-lfs source build + forced `x/net`/`x/crypto` bump    | `gitlfs` stage                    | CVE-2025-68121, CVE-2026-27143, GO-2026-4337, GO-2026-5005..5026 |
+| helm from `get.helm.sh` release (not buildkite apt)      | `install-tools.sh` `install_helm` | GO-2026-5005..5026 (`x/net`/`x/crypto` in helm)                  |
+| Node.js from NodeSource (not Ubuntu apt `npm`)           | `install-tools.sh` `install_node` | CVE-2026-33937 (handlebars), CVE-2023-45133 (@babel/traverse)    |
+| kubectl `GO-2026-5026` ignored (no upstream fix yet)     | `.grype.yaml`                     | — (tracked residual; re-audit on kubectl bump)                   |
+| Container tools opt-in (`INSTALL_CONTAINER_TOOLS=false`) | `scripts/install-tools.sh`        | stale-Go Ubuntu-universe binaries                                |
 
 ### gosu shim
 
@@ -71,7 +77,9 @@ Single `workflow_dispatch` trigger. Steps in order:
 
 1. Compute version tags by grepping `ARG GH_RUNNER_VERSION` from the Dockerfile — the Dockerfile is the **single source of truth** for the runner version.
 2. Build amd64 + load locally (scan requires a local image; `--load` is incompatible with multi-arch).
-3. grype scan with `severity-cutoff: critical` and `only-fixed: true` — only fails the build for fixable Criticals.
+3. grype scan with `severity-cutoff: critical` and `only-fixed: true` — only fails the build for fixable Criticals. `anchore/scan-action` auto-reads
+   `.grype.yaml` at the repo root for ignore rules (currently the kubectl `GO-2026-5026` residual); each ignore is tracked in the README "CVEs left unfixed"
+   table and must be re-audited on version bumps.
 4. Upload SARIF to GitHub Security tab.
 5. Push multi-arch (`linux/amd64,linux/arm64`) with tags `<ver>-ubuntu-noble` and `ubuntu-noble`.
 
@@ -82,3 +90,9 @@ auto-resolve on the next `apt upgrade` / tool release.
 
 To bump the runner version, edit `ARG GH_RUNNER_VERSION` in `Dockerfile` only — the workflow reads it at build time. See `UPDATING.md` for all pinned vs.
 auto-refreshed components.
+
+## Tracking / re-audit
+
+`TODO.md` is the checklist of temporary hardening workarounds and outstanding verification (e.g. the kubectl `GO-2026-5026` `.grype.yaml` ignore, the git-lfs
+forced `x/net`/`x/crypto` bump, the unrun full build+scan). **Walk it on every version bump and scheduled rebuild**, and keep it in sync: every `.grype.yaml`
+ignore must have both a README "CVEs left unfixed" row and an open `TODO.md` item; delete an item once its workaround is no longer needed.

@@ -12,12 +12,14 @@ deployments work without changes — only the image reference changes.
 Distinct CVE IDs (grype, amd64), this image vs. an image built like the
 upstream:
 
-| Severity | Before | After |
-|----------|-------:|------:|
-| Critical | 9      | **1** |
-| High     | 73     | **23** |
+| Severity | Before |  After |
+|----------|-------:|-------:|
+| Critical |      9 |  **1** |
+| High     |     73 | **23** |
 
-The single remaining Critical is `CVE-2026-6100` (see [left unfixed](#cves-left-unfixed)).
+The remaining Criticals have a fix but no remediation path yet — `CVE-2026-6100`
+(python in aws-cli) and `GO-2026-5026` (`x/net` in kubectl); see
+[left unfixed](#cves-left-unfixed).
 
 ## Why
 
@@ -28,12 +30,12 @@ carries it (grype reports the embedded Go build info / package version), the
 9 Criticals came from exactly four places — none of them the Ubuntu base, and
 not where the original brief assumed:
 
-| Source binary | Distinct Criticals | Note |
-|---|---|---|
-| `gosu` (Ubuntu apt, built `go1.22.2`) | 7 | stale Go stdlib — the dominant source |
-| `containerd` / `ctr` / shim (`containerd.io`) | 1 | grpc `v1.78.0` — `GHSA-p77j-4mvh-x3m3` |
-| `git-lfs` (upstream release, built `go1.25.3`) | 3 | newest 2026 stdlib CVEs (shared with `gosu`) |
-| `python 3.14.5` bundled in aws-cli v2 | 1 | `CVE-2026-6100`, no upstream fix |
+| Source binary                                  | Distinct Criticals | Note                                         |
+|------------------------------------------------|--------------------|----------------------------------------------|
+| `gosu` (Ubuntu apt, built `go1.22.2`)          | 7                  | stale Go stdlib — the dominant source        |
+| `containerd` / `ctr` / shim (`containerd.io`)  | 1                  | grpc `v1.78.0` — `GHSA-p77j-4mvh-x3m3`       |
+| `git-lfs` (upstream release, built `go1.25.3`) | 3                  | newest 2026 stdlib CVEs (shared with `gosu`) |
+| `python 3.14.5` bundled in aws-cli v2          | 1                  | `CVE-2026-6100`, no upstream fix             |
 
 Zero Criticals (and only one `deb`-sourced High) came from Ubuntu packages —
 `apt upgrade` already takes the base layer to clean, so the OS release version
@@ -41,16 +43,18 @@ is irrelevant to these findings.
 
 ## What this image changes
 
-| Fix | Effect |
-|-----|--------|
-| **`gosu` → `setpriv` shim** | The apt `gosu` is a Go binary (`go1.22.2`) and the largest CVE source. Replaced by a tiny [`setpriv`](scripts/gosu) wrapper (util-linux, pure C) with identical "switch user + init groups + exec" behaviour. Kills `CVE-2024-24790`, `CVE-2025-22871`, `GO-2024-2887`, `GO-2025-3563`. |
-| **Docker daemon / `containerd.io` not shipped** | `containerd`'s binaries embed the grpc CVE. A runner that mounts the host `/var/run/docker.sock` only needs the **CLI** — so we install `docker-ce-cli` + buildx + compose and gate the daemon behind `INSTALL_DOCKER_DAEMON=true` (for docker-in-docker). Kills `GHSA-p77j-4mvh-x3m3`. |
-| **`git-lfs` compiled from source** | The upstream release binary is built with a Go that still carries the 2026 stdlib CVEs. We rebuild it in a throwaway `golang` stage with current Go (cross-compiled, no QEMU). Kills `CVE-2025-68121`, `CVE-2026-27143`, `GO-2026-4337`. |
-| **`apt-get upgrade -y`** | Closes the OS-package CVE tail at near-zero risk. |
-| **`snapd` purged** | Defensive — CI runners never need snap. |
-| **Container tooling opt-in** | `podman`/`buildah`/`skopeo`/CNI only with `INSTALL_CONTAINER_TOOLS=true` (Ubuntu-universe stale-Go binaries). |
-| **Runner pinned to `2.335.1`** | Latest; also the lever for the bundled `/actions-runner/externals` npm deps. |
-| **`rm -rf /var/lib/apt/lists/*` + `/tmp`** | Smaller image and attack surface. |
+| Fix                                             | Effect                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+|-------------------------------------------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| **`gosu` → `setpriv` shim**                     | The apt `gosu` is a Go binary (`go1.22.2`) and the largest CVE source. Replaced by a tiny [`setpriv`](scripts/gosu) wrapper (util-linux, pure C) with identical "switch user + init groups + exec" behaviour. Kills `CVE-2024-24790`, `CVE-2025-22871`, `GO-2024-2887`, `GO-2025-3563`.                                                                                                                                                      |
+| **Docker daemon / `containerd.io` not shipped** | `containerd`'s binaries embed the grpc CVE. A runner that mounts the host `/var/run/docker.sock` only needs the **CLI** — so we install `docker-ce-cli` + buildx + compose and gate the daemon behind `INSTALL_DOCKER_DAEMON=true` (for docker-in-docker). Kills `GHSA-p77j-4mvh-x3m3`.                                                                                                                                                      |
+| **`git-lfs` compiled from source**              | The upstream release binary is built with a Go that still carries the 2026 stdlib CVEs. We rebuild it in a throwaway `golang` stage with current Go (cross-compiled, no QEMU), and force-upgrade `golang.org/x/net`→`v0.55.0` / `golang.org/x/crypto`→`v0.53.0` (the source tag still pins the vulnerable versions). Kills `CVE-2025-68121`, `CVE-2026-27143`, `GO-2026-4337`, and the `x/net`/`x/crypto` 2026 batch (`GO-2026-5005..5026`). |
+| **`helm` from the official release, not apt**   | The buildkite apt repo lags and ships a helm built against the vulnerable `x/net`/`x/crypto`. We pull the `get.helm.sh` binary instead (`HELM_VERSION`, default `3.21.2` — the first 3.x with the fixed deps). Kills the `helm` `GO-2026-5005..5026` critical batch.                                                                                                                                                                         |
+| **Node.js + npm from NodeSource, not apt**      | Ubuntu's apt `npm` drags in a stale Debian node-* tree — `handlebars` `4.7.7` (`CVE-2026-33937`) and `node-babel7` `7.20.x` (`CVE-2023-45133`), both critical. NodeSource's self-contained npm (`NODE_MAJOR`, default `24` LTS) avoids the whole tree.                                                                                                                                                                                       |
+| **`apt-get upgrade -y`**                        | Closes the OS-package CVE tail at near-zero risk.                                                                                                                                                                                                                                                                                                                                                                                            |
+| **`snapd` purged**                              | Defensive — CI runners never need snap.                                                                                                                                                                                                                                                                                                                                                                                                      |
+| **Container tooling opt-in**                    | `podman`/`buildah`/`skopeo`/CNI only with `INSTALL_CONTAINER_TOOLS=true` (Ubuntu-universe stale-Go binaries).                                                                                                                                                                                                                                                                                                                                |
+| **Runner pinned to `2.335.1`**                  | Latest; also the lever for the bundled `/actions-runner/externals` npm deps.                                                                                                                                                                                                                                                                                                                                                                 |
+| **`rm -rf /var/lib/apt/lists/*` + `/tmp`**      | Smaller image and attack surface.                                                                                                                                                                                                                                                                                                                                                                                                            |
 
 ### Why not just use a newer Ubuntu base (e.g. 25.10)?
 
@@ -95,22 +99,26 @@ docker build --build-arg INSTALL_DOCKER_DAEMON=true -t hardened-runner:noble-din
 docker build --build-arg INSTALL_CONTAINER_TOOLS=true -t hardened-runner:noble-containers .
 ```
 
-Build args: `GH_RUNNER_VERSION`, `GIT_LFS_VERSION`, `INSTALL_DOCKER_DAEMON`
-(default `false`), `INSTALL_CONTAINER_TOOLS` (default `false`),
-`INSTALL_POWERSHELL` (default `true`), `RUNNER_UID`/`RUNNER_GID`/`DOCKER_GID`.
+Build args: `GH_RUNNER_VERSION`, `GIT_LFS_VERSION`, `HELM_VERSION`,
+`KUBECTL_MINOR_VERSION`, `NODE_MAJOR`, `INSTALL_DOCKER_DAEMON` (default `false`),
+`INSTALL_CONTAINER_TOOLS` (default `false`), `INSTALL_POWERSHELL` (default
+`true`), `RUNNER_UID`/`RUNNER_GID`/`DOCKER_GID`.
 
 ## CVEs left unfixed
 
-The CI gate (`.github/workflows/build.yml`) fails if the eliminated cluster
-reappears. The following are accepted residuals:
+The CI gate (`.github/workflows/build.yml`) fails on any fixable Critical, so
+the eliminated cluster cannot silently reappear. The following are accepted
+residuals — those with a fix but no remediation path are ignored in
+[`.grype.yaml`](.grype.yaml), re-audited on every version bump:
 
-| CVE(s) | Component | Why |
-|--------|-----------|-----|
-| `CVE-2026-6100` (Critical), `CVE-2026-3298`, `CVE-2026-4786` (High) | python `3.14.5` bundled in **aws-cli v2** | grype reports no fixed version — no patched python ships upstream yet. aws-cli v2 always bundles its own interpreter. |
-| `tar`, `minimatch`, `glob`, `undici`, `cross-spawn` (npm, High) | bundled in `/actions-runner/externals/node*` | Pinned by the `actions/runner` tarball (already on the latest, `2.335.1`). Clear when upstream refreshes its bundled deps. |
-| `docker` / `containerd` vendored modules (High) | inside `docker-ce-cli` / buildx / compose | Module-level findings in the CLI we keep; clear on the next Docker package bump (`apt upgrade`). |
-| `CVE-2024-52308` (High) | `gh` | Upstream `wont-fix`. |
-| podman/buildah/skopeo Go-stdlib CVEs | container tooling | Only when `INSTALL_CONTAINER_TOOLS=true`; inherited from Ubuntu universe. Default builds don't ship these. |
+| CVE(s)                                                              | Component                                    | Why                                                                                                                                                                                                                                                   |
+|---------------------------------------------------------------------|----------------------------------------------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `CVE-2026-6100` (Critical), `CVE-2026-3298`, `CVE-2026-4786` (High) | python `3.14.5` bundled in **aws-cli v2**    | grype reports no fixed version — no patched python ships upstream yet. aws-cli v2 always bundles its own interpreter.                                                                                                                                 |
+| `GO-2026-5026` (Critical, `x/net/idna`)                             | `golang.org/x/net` `v0.49.0` in **kubectl**  | Fixed in `x/net` `v0.55.0`, but no kubernetes release ships the bump yet (even `v1.36.2` pins `v0.49.0`), and building kubectl from source with a forced bump is impractical. Ignored in [`.grype.yaml`](.grype.yaml); clears when k8s bumps `x/net`. |
+| `tar`, `minimatch`, `glob`, `undici`, `cross-spawn` (npm, High)     | bundled in `/actions-runner/externals/node*` | Pinned by the `actions/runner` tarball (already on the latest, `2.335.1`). Clear when upstream refreshes its bundled deps.                                                                                                                            |
+| `docker` / `containerd` vendored modules (High)                     | inside `docker-ce-cli` / buildx / compose    | Module-level findings in the CLI we keep; clear on the next Docker package bump (`apt upgrade`).                                                                                                                                                      |
+| `CVE-2024-52308` (High)                                             | `gh`                                         | Upstream `wont-fix`.                                                                                                                                                                                                                                  |
+| podman/buildah/skopeo Go-stdlib CVEs                                | container tooling                            | Only when `INSTALL_CONTAINER_TOOLS=true`; inherited from Ubuntu universe. Default builds don't ship these.                                                                                                                                            |
 
 ## License
 

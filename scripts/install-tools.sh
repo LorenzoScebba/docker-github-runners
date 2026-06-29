@@ -15,6 +15,12 @@
 #   * git-lfs is NOT installed here — it is compiled from source with a current
 #     Go in the Dockerfile's `gitlfs` stage (the upstream release binary carries
 #     stale-Go stdlib CVEs).
+#   * helm is pulled from the official get.helm.sh release, NOT the buildkite apt
+#     repo: that repo lags and ships a helm built against the vulnerable
+#     x/net/x/crypto (the 2026 GO-2026-5005..5026 critical batch).
+#   * Node.js + npm come from NodeSource, NOT Ubuntu apt: the apt npm drags in a
+#     stale Debian node-* tree (handlebars 4.7.7 / node-babel7 7.20.x — both
+#     critical). NodeSource's npm is self-contained and avoids it.
 #   * snapd is purged; gosu is replaced by a setpriv shim (both stale Go) — see
 #     the Dockerfile.
 #
@@ -24,6 +30,8 @@ INSTALL_CONTAINER_TOOLS="${INSTALL_CONTAINER_TOOLS:-false}"
 INSTALL_DOCKER_DAEMON="${INSTALL_DOCKER_DAEMON:-false}"
 INSTALL_POWERSHELL="${INSTALL_POWERSHELL:-true}"
 KUBECTL_MINOR_VERSION="${KUBECTL_MINOR_VERSION:-1.35}"
+HELM_VERSION="${HELM_VERSION:-3.21.2}"
+NODE_MAJOR="${NODE_MAJOR:-24}"
 
 DPKG_ARCH="$(dpkg --print-architecture)"
 
@@ -53,11 +61,14 @@ configure_sources() {
   echo "deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/v${KUBECTL_MINOR_VERSION}/deb/ /" \
     > /etc/apt/sources.list.d/kubernetes.list
 
-  # Helm repo
-  curl -fsSL https://packages.buildkite.com/helm-linux/helm-debian/gpgkey \
-    | gpg --dearmor -o /usr/share/keyrings/helm.gpg
-  echo "deb [signed-by=/usr/share/keyrings/helm.gpg] https://packages.buildkite.com/helm-linux/helm-debian/any/ any main" \
-    > /etc/apt/sources.list.d/helm-stable-debian.list
+  # NodeSource (current Node.js + self-contained npm). Ubuntu's apt npm pulls in
+  # a stale Debian node-* tooling tree — handlebars 4.7.7 (CVE-2026-33937) and
+  # node-babel7 7.20.x (CVE-2023-45133), both critical. NodeSource avoids it.
+  # (helm is NOT installed from apt — see install_helm; the buildkite repo lags.)
+  curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key \
+    | gpg --dearmor -o /etc/apt/keyrings/nodesource.gpg
+  echo "deb [signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesource.com/node_${NODE_MAJOR}.x nodistro main" \
+    > /etc/apt/sources.list.d/nodesource.list
 
   apt-get update
 }
@@ -138,7 +149,19 @@ install_kubectl() {
 }
 
 install_helm() {
-  apt-get install -y --no-install-recommends helm
+  # Official release binary. The buildkite apt repo lags and ships a helm built
+  # against the vulnerable x/net/x/crypto; helm v3.21.2 is the first 3.x release
+  # whose go.mod pins the fixed x/net v0.55.0 / x/crypto v0.53.0.
+  local url="https://get.helm.sh/helm-v${HELM_VERSION}-linux-${DPKG_ARCH}.tar.gz"
+  curl -fsSL "${url}" -o /tmp/helm.tar.gz
+  tar -xzf /tmp/helm.tar.gz -C /tmp
+  mv "/tmp/linux-${DPKG_ARCH}/helm" /usr/local/bin/helm
+  rm -rf /tmp/helm.tar.gz "/tmp/linux-${DPKG_ARCH}"
+}
+
+install_node() {
+  # From the NodeSource repo configured in configure_sources (bundles npm).
+  apt-get install -y --no-install-recommends nodejs
 }
 
 install_yarn() {
@@ -162,6 +185,7 @@ main() {
   install_aws_cli
   install_kubectl
   install_helm
+  install_node
   install_yarn
   [[ "${INSTALL_POWERSHELL}" == "true" ]] && install_powershell
   [[ "${INSTALL_CONTAINER_TOOLS}" == "true" ]] && install_container_tools
@@ -170,7 +194,7 @@ main() {
   # final cache cleanup.
   rm -f /etc/apt/sources.list.d/git-core.list \
         /etc/apt/sources.list.d/kubernetes.list \
-        /etc/apt/sources.list.d/helm-stable-debian.list
+        /etc/apt/sources.list.d/nodesource.list
 }
 
 main "$@"
