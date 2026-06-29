@@ -49,6 +49,7 @@ jobs:
       - name: Scan with grype (distinct CVEs)
         uses: anchore/scan-action@v7
         id: grype
+        continue-on-error: true
         with:
           image: ${{ steps.meta.outputs.scan_tag }}
           fail-build: true
@@ -56,12 +57,20 @@ jobs:
           only-fixed: true
 
       - name: Inspect action SARIF report
+        if: always()
         run: cat ${{ steps.grype.outputs.sarif }}
 
       - name: upload Anchore scan SARIF report
+        if: always()
         uses: github/codeql-action/upload-sarif@v4
         with:
           sarif_file: ${{ steps.grype.outputs.sarif }}
+
+      - name: Fail if grype found fixable critical CVEs
+        if: steps.grype.outcome == 'failure'
+        run: |
+          echo "::error::grype scan found fixable critical CVEs — see the Security tab for details"
+          exit 1
 
       - name: Push multi-arch image
         if: github.event_name != 'pull_request'
