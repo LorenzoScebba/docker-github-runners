@@ -29,6 +29,7 @@ set -euo pipefail
 INSTALL_CONTAINER_TOOLS="${INSTALL_CONTAINER_TOOLS:-false}"
 INSTALL_DOCKER_DAEMON="${INSTALL_DOCKER_DAEMON:-false}"
 INSTALL_POWERSHELL="${INSTALL_POWERSHELL:-true}"
+INSTALL_SKOPEO="${INSTALL_SKOPEO:-true}"
 KUBECTL_MINOR_VERSION="${KUBECTL_MINOR_VERSION:-1.35}"
 HELM_VERSION="${HELM_VERSION:-3.21.2}"
 NODE_MAJOR="${NODE_MAJOR:-24}"
@@ -168,11 +169,19 @@ install_yarn() {
   npm install -g yarn
 }
 
+# skopeo from Ubuntu-universe. The apt package is built against an older Go
+# toolchain that may carry Go-stdlib CVEs; run `grype` after bumping to check.
+# Installed by default because it is useful for registry operations and carries
+# no network-listening attack surface.
+install_skopeo() {
+  apt-get install -y --no-install-recommends skopeo
+}
+
 # OPT-IN ONLY: the Ubuntu-universe container stack. These carry the stale-Go
 # CVE cluster the upstream image is flagged for. Documented in README.
 install_container_tools() {
-  echo "INSTALL_CONTAINER_TOOLS=true -> installing podman/buildah/skopeo (carries known Go-stdlib CVEs)"
-  apt-get install -y --no-install-recommends podman buildah skopeo
+  echo "INSTALL_CONTAINER_TOOLS=true -> installing podman/buildah (carries known Go-stdlib CVEs)"
+  apt-get install -y --no-install-recommends podman buildah
 }
 
 # ---------------------------------------------------------------------------
@@ -188,6 +197,7 @@ main() {
   install_node
   install_yarn
   [[ "${INSTALL_POWERSHELL}" == "true" ]] && install_powershell
+  [[ "${INSTALL_SKOPEO}" == "true" ]] && install_skopeo
   [[ "${INSTALL_CONTAINER_TOOLS}" == "true" ]] && install_container_tools
 
   # Repo lists are removed by the Dockerfile after this script, alongside the

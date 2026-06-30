@@ -57,10 +57,13 @@ ARG TARGETPLATFORM
 #   INSTALL_DOCKER_DAEMON: adds dockerd + containerd.io for docker-in-docker.
 #     OFF by default — containerd embeds the grpc CVE and host-socket runners
 #     don't need it.
-#   INSTALL_CONTAINER_TOOLS: podman/buildah/skopeo/CNI (stale-Go). OFF.
+#   INSTALL_CONTAINER_TOOLS: podman/buildah/CNI (stale-Go). OFF.
+#   INSTALL_SKOPEO: skopeo only (no podman/buildah). ON by default — useful for
+#     registry operations; carries no listener surface. Re-audit CVEs on bumps.
 # git-lfs is always included, compiled from source in the `gitlfs` stage above.
 ARG INSTALL_DOCKER_DAEMON="false"
 ARG INSTALL_CONTAINER_TOOLS="false"
+ARG INSTALL_SKOPEO="true"
 ARG INSTALL_POWERSHELL="true"
 ARG KUBECTL_MINOR_VERSION="1.35"
 # helm is pulled from the official get.helm.sh release (the buildkite apt repo
@@ -147,6 +150,7 @@ COPY scripts/install-tools.sh /tmp/install-tools.sh
 RUN INSTALL_DOCKER_DAEMON="${INSTALL_DOCKER_DAEMON}" \
     INSTALL_CONTAINER_TOOLS="${INSTALL_CONTAINER_TOOLS}" \
     INSTALL_POWERSHELL="${INSTALL_POWERSHELL}" \
+    INSTALL_SKOPEO="${INSTALL_SKOPEO}" \
     KUBECTL_MINOR_VERSION="${KUBECTL_MINOR_VERSION}" \
     HELM_VERSION="${HELM_VERSION}" \
     NODE_MAJOR="${NODE_MAJOR}" \
