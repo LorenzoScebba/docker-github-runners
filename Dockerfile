@@ -52,6 +52,7 @@ SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 # npm deps bundled under /actions-runner/externals (fix #4).
 ARG GH_RUNNER_VERSION="2.335.1"
 ARG TARGETPLATFORM
+ARG TARGETARCH
 
 # Build knobs (CVE-driven defaults — see install-tools.sh and README).
 #   INSTALL_DOCKER_DAEMON: adds dockerd + containerd.io for docker-in-docker.
@@ -126,11 +127,31 @@ RUN echo "en_US.UTF-8 UTF-8" >> /etc/locale.gen \
        libxtst6 \
        xauth \
        xvfb \
-       chromium \
   && locale-gen \
   && ( apt-get purge -y --auto-remove snapd 2>/dev/null || true ) \
   && rm -rf /var/lib/snapd /snap \
   && printf '[global]\nbreak-system-packages = true\n' > /etc/pip.conf
+
+# Browser for CI (Cypress/Playwright/Selenium). Ubuntu's apt `chromium` is a
+# snap stub — it needs snapd, and snapd is a Go binary that reintroduces ~165
+# CVEs (16 Critical), the same stale-Go cluster the gosu shim removed. Instead
+# we drop the versioned Chrome for Testing zip: same Chromium codebase but a C++
+# binary grype finds nothing in, so it adds ZERO distinct CVEs over the base.
+# Cypress auto-detects it as the "chrome-for-testing" browser (on PATH as
+# `chrome`). Its runtime libs (libnss3/libgtk/libgbm/libasound/xvfb/...) are the
+# ones already installed above. Chrome for Testing ships linux64 only, so this
+# is guarded to amd64; the arm64 image builds without a browser.
+RUN if [ "${TARGETARCH}" = "amd64" ]; then \
+      CFT_URL="$(curl -fsSL https://googlechromelabs.github.io/chrome-for-testing/last-known-good-versions-with-downloads.json \
+        | jq -r '.channels.Stable.downloads.chrome[] | select(.platform=="linux64") | .url')" \
+      && curl -fsSL "${CFT_URL}" -o /tmp/cft.zip \
+      && unzip -q /tmp/cft.zip -d /opt \
+      && rm /tmp/cft.zip \
+      && ln -s /opt/chrome-linux64/chrome /usr/local/bin/chrome \
+      && /opt/chrome-linux64/chrome --version ; \
+    else \
+      echo "Chrome for Testing: skipping on ${TARGETARCH} (linux64/amd64 only)" ; \
+    fi
 
 # Replace gosu (stale-Go binary, dominant CVE source) with a setpriv shim that
 # preserves its "switch user + init groups + exec" behaviour. The apt gosu is

@@ -29,6 +29,16 @@ bash scan.sh
 
 There are no unit tests — correctness is validated by `grype` scan and the CI gate in `build.yml`.
 
+## Post-build verification
+
+After every `docker build`, verify each newly added binary is actually present in the final image:
+
+```bash
+docker run --rm --entrypoint <tool> hardened-runner:noble version
+```
+
+Docker layer caching can cause an install step to be skipped silently (e.g. a previous failed build leaves no cache, but a prior successful build's layer is reused). A smoke test catches this immediately rather than at runtime.
+
 ## Architecture
 
 ### Two-stage Dockerfile
