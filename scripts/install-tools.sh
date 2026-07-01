@@ -171,10 +171,10 @@ install_yarn() {
 install_crane() {
   local arch="${DPKG_ARCH/amd64/x86_64}"
   local url
-  # Asset names include the version: crane_<ver>_Linux_<arch>.tar.gz
+  # Asset naming: go-containerregistry_Linux_<arch>.tar.gz (bundles crane + gcrane)
   url="$(curl -fsSL -H 'Accept: application/vnd.github+json' \
     https://api.github.com/repos/google/go-containerregistry/releases/latest \
-    | jq -r --arg suffix "Linux_${arch}.tar.gz" '.assets[] | select(.name | endswith($suffix)) | .browser_download_url')"
+    | jq -r --arg n "go-containerregistry_Linux_${arch}.tar.gz" '.assets[] | select(.name == $n) | .browser_download_url')"
   curl -fsSL "${url}" -o /tmp/crane.tar.gz
   tar -xzf /tmp/crane.tar.gz -C /tmp crane
   mv /tmp/crane /usr/local/bin/crane
