@@ -1,22 +1,24 @@
-name: build-pr
+name: e2e
 
 on:
   pull_request:
-    branches: [master]
+    types: [opened, synchronize, reopened, labeled]
 
 permissions:
   contents: read
   pull-requests: write
+  security-events: write
 
 jobs:
-  scan:
+  e2e:
+    if: contains(github.event.pull_request.labels.*.name, 'e2e')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
       - uses: docker/setup-qemu-action@v4
       - uses: docker/setup-buildx-action@v4
 
-      - name: Build (amd64, load for scan)
+      - name: Build (amd64, load)
         uses: docker/build-push-action@v7
         with:
           context: .
@@ -24,14 +26,14 @@ jobs:
           platforms: linux/amd64
           build-args: |
             INSTALL_CONTAINER_TOOLS=false
-          tags: hardened-runner:pr-${{ github.event.pull_request.number }}
+          tags: hardened-runner:e2e
 
       - name: Scan with grype
         uses: anchore/scan-action@v7
         id: grype
         continue-on-error: true
         with:
-          image: hardened-runner:pr-${{ github.event.pull_request.number }}
+          image: hardened-runner:e2e
           fail-build: true
           severity-cutoff: critical
           only-fixed: true
@@ -62,6 +64,38 @@ jobs:
               issue_number: context.issue.number,
               body,
             });
+
+      - name: Start container (override entrypoint, skip registration)
+        run: |
+          docker run -d --name runner-e2e \
+            --entrypoint sleep \
+            -v /var/run/docker.sock:/var/run/docker.sock \
+            hardened-runner:e2e infinity
+
+      - name: Check tool availability
+        run: |
+          set -e
+          for check in \
+            "aws --version" \
+            "helm version" \
+            "gh --version" \
+            "docker --version" \
+            "yq --version" \
+            "make --version" \
+            "yarn --version" \
+            "chrome --version" \
+            "crane version"; do
+            echo "::group::${check}"
+            docker exec runner-e2e sh -c "${check}"
+            echo "::endgroup::"
+          done
+
+      - name: Check container execution (container.image equivalent)
+        run: docker exec runner-e2e docker run --rm alpine:3.20 echo "container execution ok"
+
+      - name: Clean up
+        if: always()
+        run: docker rm -f runner-e2e || true
 
       - name: Fail if grype found fixable critical CVEs
         if: steps.grype.outcome == 'failure'
