@@ -82,7 +82,8 @@ jobs:
             "make --version" \
             "yarn --version" \
             "chrome --version" \
-            "crane version"; do
+            "crane version" \
+            "psql --version"; do
             echo "::group::${check}"
             docker exec runner-e2e sh -c "${check}"
             echo "::endgroup::"
