@@ -34,7 +34,8 @@ jobs:
           [[ -n "$ver" ]] || { echo "::error::could not read GH_RUNNER_VERSION from Dockerfile"; exit 1; }
           image="ghcr.io/${{ github.repository }}"
           image="${image,,}"
-          echo "tags=${image}:${ver}-ubuntu-noble,${image}:ubuntu-noble" >> "$GITHUB_OUTPUT"
+          short_sha="${GITHUB_SHA:0:7}"
+          echo "tags=${image}:${ver}-ubuntu-noble,${image}:ubuntu-noble,${image}:${ver}-ubuntu-noble-${short_sha}" >> "$GITHUB_OUTPUT"
           echo "scan_tag=${image}:scan-${{ github.sha }}" >> "$GITHUB_OUTPUT"
 
       # Build amd64 locally first so we can scan it before publishing.
