@@ -91,7 +91,8 @@ Single `workflow_dispatch` trigger. Steps in order:
    `.grype.yaml` at the repo root for ignore rules (currently the kubectl `GO-2026-5026` residual); each ignore is tracked in the README "CVEs left unfixed"
    table and must be re-audited on version bumps.
 4. Upload SARIF to GitHub Security tab.
-5. Push multi-arch (`linux/amd64,linux/arm64`) with tags `<ver>-ubuntu-noble` and `ubuntu-noble`.
+5. Push multi-arch (`linux/amd64,linux/arm64`) with tags `<ver>-ubuntu-noble`, `ubuntu-noble`, and
+   `<ver>-ubuntu-noble-<short-sha>`.
 
 The CI gate does **not** block on High-severity findings — these are tracked in the README "CVEs left unfixed" table and are either unfixable upstream or will
 auto-resolve on the next `apt upgrade` / tool release.
