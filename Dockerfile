@@ -105,6 +105,7 @@ RUN echo "en_US.UTF-8 UTF-8" >> /etc/locale.gen \
        lsb-release \
        openssh-client \
        pkg-config \
+       postgresql-client \
        python3 \
        python3-pip \
        python3-setuptools \
