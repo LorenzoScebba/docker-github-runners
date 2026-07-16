@@ -189,6 +189,13 @@ install_chrome() {
   ln -sf /usr/bin/google-chrome-stable /usr/local/bin/chrome
 }
 
+# Used by Playwright/Cypress for video recording of failed test runs. Ubuntu's
+# apt ffmpeg is a native C binary (not Go), so it carries none of the
+# stale-Go CVEs this image is built to avoid.
+install_ffmpeg() {
+  apt-get install -y --no-install-recommends ffmpeg
+}
+
 install_crane() {
   local arch="${DPKG_ARCH/amd64/x86_64}"
   local url
@@ -222,6 +229,7 @@ main() {
   install_node
   install_yarn
   install_crane
+  install_ffmpeg
   [[ "${DPKG_ARCH}" == "amd64" ]] && install_chrome
   [[ "${INSTALL_POWERSHELL}" == "true" ]] && install_powershell
   [[ "${INSTALL_CONTAINER_TOOLS}" == "true" ]] && install_container_tools

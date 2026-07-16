@@ -82,6 +82,7 @@ jobs:
             "make --version" \
             "yarn --version" \
             "chrome --version" \
+            "ffmpeg -version" \
             "crane version" \
             "psql --version"; do
             echo "::group::${check}"
