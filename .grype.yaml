@@ -13,3 +13,16 @@ ignore:
   - vulnerability: GO-2026-5026
     package:
       name: golang.org/x/net
+
+  # node-tar Gzip Bomb decompression DoS (GHSA-23hp-3jrh-7fpw / CVE-2026-59873, Critical,
+  # fixed in tar@7.5.19). Bundled 3x: NodeSource's system npm and the actions/runner
+  # tarball's node20/node24 externals. Accepted risk, not a remediation-path gap: this is a
+  # DoS-only finding (disk exhaustion via a crafted archive) that only triggers by extracting
+  # an already-malicious/compromised npm package during `npm install` — a scenario that
+  # already implies arbitrary code execution far worse than a full disk. This fleet's
+  # runners are used by trusted users only. Re-audit if that trust model ever changes (e.g.
+  # untrusted-contributor / fork workflows), or drop this once actions/runner's node20
+  # externals move past npm 10.8.2 (pinned to tar ^6.2.1, no patched 6.x release exists).
+  - vulnerability: GHSA-23hp-3jrh-7fpw
+    package:
+      name: tar
