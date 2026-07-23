@@ -3,6 +3,12 @@ name: e2e
 on:
   pull_request:
     types: [opened, synchronize, reopened]
+    paths:
+      - 'Dockerfile'
+      - 'scripts/**'
+      - '.grype.yaml'
+      - '.dockerignore'
+      - '.github/workflows/e2e.yaml'
 
 permissions:
   contents: read

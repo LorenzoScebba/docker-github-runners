@@ -89,6 +89,83 @@ Supported env vars match upstream: `ACCESS_TOKEN` or `APP_ID`/`APP_PRIVATE_KEY`
 `RUNNER_GROUP`, `EPHEMERAL`, `DISABLE_AUTO_UPDATE`, `RUN_AS_ROOT`,
 `START_DOCKER_SERVICE`, `DEBUG_OUTPUT`, `DISABLE_AUTOMATIC_DEREGISTRATION`, etc.
 
+### Rate limiting / ephemeral runners
+
+For ephemeral deployments (`EPHEMERAL=1`), set **`DISABLE_AUTOMATIC_DEREGISTRATION=true`**.
+
+An ephemeral runner processes exactly one job, then removes its own
+registration from GitHub and exits. By the time the container's exit trap
+fires, the runner is already gone — so the automatic deregistration path
+(`entrypoint.sh` → `token.sh` → `config.sh remove`) mints a **second**
+runner-registration token purely to run a no-op removal. With `ACCESS_TOKEN`
+auth that doubles the calls to GitHub's `registration-token` endpoint per
+runner (worse with `APP_ID`/`APP_PRIVATE_KEY`, which also re-lists app
+installations); at churn this trips the PAT's 5,000/hr primary limit and
+GitHub's secondary burst limit. Disabling deregistration for ephemeral runners
+removes the redundant call.
+
+This is safe for ephemeral runners:
+
+- The startup registration is unchanged — the runner still registers normally.
+- A runner killed *before* it picks up a job won't self-deregister and will
+  leave an offline entry, but GitHub automatically removes an ephemeral runner
+  that hasn't connected for more than **1 day** (vs. 14 days for
+  non-ephemeral), so ghosts self-expire. With the default
+  `RANDOM_RUNNER_SUFFIX=true` + `--replace`, they never block new
+  registrations.
+
+**Do not** set this on non-ephemeral runners — those never self-deregister, so
+disabling it genuinely leaks registrations (lingering the full 14 days).
+
+#### Prefer a pre-minted `RUNNER_TOKEN` over `APP_ID`/`APP_PRIVATE_KEY` at scale
+
+The auth method determines how many *token-minting* REST calls each runner makes
+before it can register — these are the calls that scale per-runner and consume
+the org/App rate budget:
+
+| Passed to the container            | Token-minting REST calls per runner | Endpoint(s) hit                                            |
+|------------------------------------|-------------------------------------|------------------------------------------------------------|
+| `APP_ID` + `APP_PRIVATE_KEY`       | **3**                               | `GET /app/installations`, `POST .../access_tokens`, `POST .../registration-token` |
+| `ACCESS_TOKEN` (PAT)               | **1**                               | `POST .../registration-token`                              |
+| `RUNNER_TOKEN` (pre-minted)        | **0**                               | none — the token is used directly                          |
+
+These counts are *on top of* the runner's own registration handshake:
+`config.sh --token … --replace` always contacts GitHub once to register the
+runner, and that happens identically for every auth method — it's intrinsic to
+registering a runner and can't be avoided. What the table above measures is the
+*extra* per-runner token minting that a pre-supplied `RUNNER_TOKEN` removes.
+
+With App auth, every single runner re-lists the app's installations and mints a
+fresh installation token *and* a registration token — so a burst of runners
+hammers the App with three of these calls each, which is what trips the
+secondary rate limit fastest. `POST .../registration-token` counts against the
+core REST rate limit (see [actions/runner#1386](https://github.com/actions/runner/issues/1386)).
+
+A runner-registration token is **valid for 1 hour and can register many
+runners**, so the leanest pattern is to mint one centrally and reuse it:
+
+```bash
+# Mint once (e.g. in your scale-up controller), reuse for every runner
+# started within the hour — one API call instead of one (or three) per runner.
+RUNNER_TOKEN=$(gh api -X POST \
+  /orgs/ORG_NAME/actions/runners/registration-token --jq .token)
+
+docker run -d \
+  -e RUNNER_SCOPE=org -e ORG_NAME=org-name \
+  -e EPHEMERAL=1 -e DISABLE_AUTOMATIC_DEREGISTRATION=true \
+  -e RUNNER_TOKEN="${RUNNER_TOKEN}" \
+  -v /var/run/docker.sock:/var/run/docker.sock \
+  ghcr.io/lorenzoscebba/docker-github-runners:2.335.1-ubuntu-noble
+```
+
+Pass **only** `RUNNER_TOKEN` — do not also set `ACCESS_TOKEN` or `APP_ID`, or
+the entrypoint will discard your token and mint a new one via the API anyway
+(`entrypoint.sh` regenerates whenever `ACCESS_TOKEN`/`APP_ID` is present). This
+takes the per-runner *token-minting* calls to zero and hits the App/PAT roughly
+once per hour regardless of how many runners you churn. Each runner still
+performs its own one-time `config.sh` registration handshake — that's
+unavoidable and the same under any auth method.
+
 ## Build
 
 ```bash
