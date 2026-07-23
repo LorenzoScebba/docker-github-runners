@@ -37,25 +37,64 @@ jobs:
           severity-cutoff: critical
           only-fixed: true
 
+      - name: Scan with grype (json, for PR comment)
+        uses: anchore/scan-action@v7
+        id: grype-json
+        continue-on-error: true
+        with:
+          image: hardened-runner:e2e
+          fail-build: false
+          severity-cutoff: critical
+          only-fixed: true
+          output-format: json
+
       - name: Upload SARIF
         if: always()
         uses: github/codeql-action/upload-sarif@v4
         with:
           sarif_file: ${{ steps.grype.outputs.sarif }}
+          ref: refs/heads/${{ github.head_ref }}
+          sha: ${{ github.event.pull_request.head.sha }}
 
       - name: Post scan result as PR comment
         if: always()
         uses: actions/github-script@v7
         with:
           script: |
+            const fs = require('fs');
             const outcome = '${{ steps.grype.outcome }}';
             const icon = outcome === 'failure' ? '❌' : '✅';
-            const status = outcome === 'failure'
-              ? 'Fixable **critical** CVEs found — see the Security tab for details.'
+
+            let criticals = [];
+            try {
+              const report = JSON.parse(fs.readFileSync('${{ steps.grype-json.outputs.json }}', 'utf8'));
+              const seen = new Set();
+              for (const match of report.matches ?? []) {
+                if (match.vulnerability?.severity !== 'Critical') continue;
+                const key = `${match.vulnerability.id}:${match.artifact.name}@${match.artifact.version}`;
+                if (seen.has(key)) continue;
+                seen.add(key);
+                criticals.push({
+                  id: match.vulnerability.id,
+                  pkg: match.artifact.name,
+                  installed: match.artifact.version,
+                  fixed: (match.vulnerability.fix?.versions ?? []).join(', ') || 'unknown',
+                });
+              }
+            } catch (err) {
+              core.warning(`Could not parse grype JSON report: ${err}`);
+            }
+
+            const status = criticals.length
+              ? `Fixable **critical** CVEs found:\n\n` +
+                `| CVE/GHSA | Package | Installed | Fixed in |\n` +
+                `|---|---|---|---|\n` +
+                criticals.map(c => `| ${c.id} | ${c.pkg} | ${c.installed} | ${c.fixed} |`).join('\n')
               : 'No fixable critical CVEs found.';
+
             const body = `## ${icon} grype scan\n\n${status}\n\n` +
               `_Scan ran on \`linux/amd64\` with \`severity-cutoff: critical\` and \`only-fixed: true\`. ` +
-              `Ignored rules from \`.grype.yaml\` apply._`;
+              `Ignored rules from \`.grype.yaml\` apply. Full results in the Security tab._`;
             await github.rest.issues.createComment({
               owner: context.repo.owner,
               repo: context.repo.repo,

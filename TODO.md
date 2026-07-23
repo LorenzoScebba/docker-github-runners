@@ -33,6 +33,13 @@ longer needed.
   does not fail the gate (`only-fixed: true`). Re-check on rebuild whether a
   fixed aws-cli/python is available.
 
+- [ ] **`GHSA-23hp-3jrh-7fpw` (Critical, node-tar Gzip Bomb DoS) — ignored in
+  [`.grype.yaml`](.grype.yaml) as an accepted risk, not a remediation gap.**
+  Re-audit if this fleet's runners are ever exposed to untrusted
+  contributors/forks, or drop the ignore once `actions/runner`'s node20
+  externals move past npm 10.8.2 (pinned to `tar ^6.2.1`, no patched 6.x
+  release exists).
+
 ## Verification still owed
 
 - [ ] **Full image build + grype scan not yet run end-to-end.** Individual
