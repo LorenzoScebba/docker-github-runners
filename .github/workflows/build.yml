@@ -5,6 +5,12 @@ on:
   push:
     branches:
       - master
+    paths:
+      - 'Dockerfile'
+      - 'scripts/**'
+      - '.grype.yaml'
+      - '.dockerignore'
+      - '.github/workflows/build.yml'
 
 permissions:
   contents: read
