@@ -168,6 +168,16 @@ killed mid-job stops refreshing, and `statsd_exporter`'s per-metric TTL expires
 its series a few missed heartbeats later — so a `SIGKILL`'d container drops out
 of the counts instead of showing "busy" forever.
 
+A graceful stop doesn't have to wait for that TTL, though: the CMD wrapper
+forks a small watcher alongside `exec`-ing into `Runner.Listener` (same PID,
+so the watcher just polls for it to disappear) and, the instant it exits,
+sends one last `idle:0`/`busy:0` pair — clearing the runner out of `sum by
+(state)` immediately instead of lingering for up to the TTL. This is what
+catches an **idle** runner being stopped (`docker stop` / scale-down with no
+job running), which no job hook ever sees. A `SIGKILL` of the whole container
+still takes the watcher out with everything else — that case has no code path
+left to run and continues to rely on the TTL.
+
 ### Enable it
 
 Point every runner at the shared exporter:

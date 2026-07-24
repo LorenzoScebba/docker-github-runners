@@ -205,6 +205,21 @@ metrics_emit_status() {
   return 0
 }
 
+# metrics_emit_offline — one-shot "this runner is gone" signal: both idle and
+# busy pinned to 0. Called by the watcher in runner-run.sh the instant
+# Runner.Listener exits, so a graceful stop (docker stop / scale-down, with or
+# without a job in flight) clears the runner out of `sum by (state)`
+# immediately instead of waiting out the status gauge's TTL. Synchronous (not
+# backgrounded): the caller is about to exit itself and needs this to land
+# first. Does nothing for a SIGKILL'd container — there is no code path left
+# to run at that point, which is exactly what the TTL exists to cover.
+metrics_emit_offline() {
+  metrics_enabled || return 0
+  local base; base="$(metrics_gauge_base_tags)"
+  _metrics_send "${METRICS_PREFIX}_status:0|g|#${base},state:idle"
+  _metrics_send "${METRICS_PREFIX}_status:0|g|#${base},state:busy"
+}
+
 # metrics_emit_counter <name-without-prefix> [extra-tags]
 metrics_emit_counter() {
   metrics_enabled || return 0

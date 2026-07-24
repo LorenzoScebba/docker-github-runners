@@ -32,6 +32,23 @@ if metrics_enabled; then
     nohup "${DIR}/heartbeat.sh" >/dev/null 2>&1 &
   fi
   disown 2>/dev/null || true
+
+  # `exec` below replaces this process with Runner.Listener but keeps the same
+  # PID, so a sibling watcher forked now can poll for that PID's death and
+  # fire one last "offline" status the moment it happens — covering a
+  # graceful stop with no job in flight, which no job hook ever sees. Ignore
+  # the stop signal in the watcher itself so it outlives the signal long
+  # enough to notice the exit; a SIGKILL of the whole container still takes
+  # the watcher out too, and that case still relies on the status gauge's TTL.
+  WATCH_PID="$$"
+  (
+    trap '' TERM INT QUIT
+    while kill -0 "${WATCH_PID}" 2>/dev/null; do
+      sleep 2
+    done
+    metrics_emit_offline
+  ) >/dev/null 2>&1 &
+  disown 2>/dev/null || true
 fi
 
 exec "$@"
