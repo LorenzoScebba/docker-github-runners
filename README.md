@@ -128,6 +128,147 @@ once per hour regardless of how many runners you churn. Each runner still
 performs its own one-time `config.sh` registration handshake — that's
 unavoidable and the same under any auth method.
 
+## Runner metrics
+
+Fleet observability normally means polling GitHub's REST API to enumerate
+runners and their state (e.g. `github-org-runner-exporter`) — **N calls that
+compete for the very rate-limit budget** the ephemeral-runner path above is
+trying to conserve. Instead, each runner **pushes** its own metrics, so the
+GitHub API is never touched for observability.
+
+The runner reports **whether it is idle or busy, and which workflow/job it is
+running when busy**, plus job throughput and duration. It is **off by default**:
+with `RUNNER_METRICS_STATSD_ADDR` unset the hooks are no-ops and the image
+behaves exactly like upstream — enabling it adds **no new package** to the image
+(emission is statsd-over-UDP via bash's built-in `/dev/udp`, so the grype scan
+is unchanged).
+
+### How it works
+
+Ephemeral runners live for one job (often <1 min), so Prometheus can't scrape
+them directly — they push instead. A container reports its state via three
+in-image scripts under `/actions-runner/hooks/`:
+
+- a **CMD wrapper** launches a background **heartbeat** that re-emits this
+  runner's `idle`/`busy` gauge every `RUNNER_METRICS_HEARTBEAT_INTERVAL`;
+- the runner's **job-started / job-completed hooks** flip that state (and emit
+  the job counters + duration).
+
+All runners across all hosts send UDP to **one central `statsd_exporter`**,
+which Prometheus scrapes as a single target. Because `runner` is a label, N
+runners land as N distinct series in one place — that fan-in is what replaces
+the N GitHub API calls.
+
+```
+runners (all hosts) ──UDP:9125──▶ statsd_exporter ──scrape:9102──▶ Prometheus
+```
+
+The heartbeat re-emitting on an interval is also the **self-heal**: a runner
+killed mid-job stops refreshing, and `statsd_exporter`'s per-metric TTL expires
+its series a few missed heartbeats later — so a `SIGKILL`'d container drops out
+of the counts instead of showing "busy" forever.
+
+### Enable it
+
+Point every runner at the shared exporter:
+
+```bash
+docker run -d \
+  -e RUNNER_SCOPE=org -e ORG_NAME=org-name -e EPHEMERAL=1 \
+  -e RUNNER_METRICS_STATSD_ADDR=statsd.metrics.internal:9125 \
+  -v /var/run/docker.sock:/var/run/docker.sock \
+  ghcr.io/lorenzoscebba/docker-github-runners:2.335.1-ubuntu-noble
+```
+
+| Env var                             | Default         | Purpose                                                                                                             |
+|-------------------------------------|-----------------|---------------------------------------------------------------------------------------------------------------------|
+| `RUNNER_METRICS_STATSD_ADDR`        | *(unset)*       | `host:port` of the central `statsd_exporter`. **Master switch** — unset ⇒ metrics off. Same value for every runner. |
+| `RUNNER_METRICS_HEARTBEAT_INTERVAL` | `15`            | Seconds between gauge refreshes. Keep the exporter's gauge TTL ≥ 2×.                                                |
+| `RUNNER_METRICS_PREFIX`             | `github_runner` | Metric name prefix.                                                                                                 |
+| `RUNNER_METRICS_EXTRA_LABELS`       | *(none)*        | Static dogstatsd tags added to every metric, e.g. `cluster:prod,env:ci`.                                            |
+| `RUNNER_METRICS_DEBUG`              | *(off)*         | `1` logs every emit and every send failure to stderr (`docker logs`) and `/tmp/runner-metrics.log`. See [Troubleshooting](#troubleshooting-metrics). |
+
+### Metrics exposed
+
+| Metric                               | Type          | Labels                                                                                 |
+|--------------------------------------|---------------|----------------------------------------------------------------------------------------|
+| `github_runner_status`               | gauge (TTL'd) | `runner`, `org`, `state` (`idle`\|`busy`); + `repo`,`workflow`,`job`,`event` when busy |
+| `github_runner_jobs_started_total`   | counter       | `org`, `repo`, `workflow`, `job`, `event`                                              |
+| `github_runner_jobs_completed_total` | counter       | `org`, `repo`, `workflow`, `job`, `event`                                              |
+| `github_runner_job_duration_seconds` | histogram     | `org`, `repo`, `workflow`, `job`, `event`                                              |
+
+```promql
+# Live free vs busy across the whole fleet
+sum by (state) (github_runner_status)
+
+# Exactly which workflow/job each busy runner is running
+github_runner_status{state="busy"} == 1
+
+# Throughput and p95 job duration
+sum by (workflow) (rate(github_runner_jobs_started_total[5m]))
+histogram_quantile(0.95, sum by (le, workflow) (rate(github_runner_job_duration_seconds_bucket[15m])))
+```
+
+Cardinality is kept bounded on purpose: unbounded fields (`run_id`, `sha`,
+`actor`) are **never** used as labels, and `runner` appears only on the TTL'd
+gauge, so churned runners expire rather than accumulate.
+
+### Deploying the collector
+
+Example artifacts live in [`metrics/`](metrics/): a
+[`statsd_mapping.yml`](metrics/statsd_mapping.yml) (per-metric TTLs + duration
+histogram buckets) and a [`docker-compose.example.yml`](metrics/docker-compose.example.yml)
+running a single `statsd_exporter` + Prometheus. For a quick local look:
+
+```bash
+docker compose -f metrics/docker-compose.example.yml up
+```
+
+In production, front the exporter with a stable address (private DNS or an
+internal NLB), open its **UDP/9125** to the runner instances' security group,
+and set the gauge TTL in `statsd_mapping.yml` to a bit above your longest job.
+Cross-host UDP can drop under load, but that's harmless here — the heartbeat
+re-sends every interval, so a lost packet self-corrects on the next tick.
+
+> **Known limitation:** the job-completed hook doesn't receive a documented
+> job-conclusion variable, so job counters carry no success/failure label yet.
+
+### Troubleshooting metrics
+
+If Prometheus shows no data, work the pipeline **runner → statsd_exporter →
+Prometheus** from the middle out.
+
+**Is anything reaching the exporter?** Its own metrics tell you — a non-zero
+`statsd_exporter_udp_packets_total` means datagrams are arriving:
+
+```bash
+curl -s <exporter>:9102/metrics | grep -E 'udp_packets_total|github_runner'
+```
+
+**Is the runner even trying to send?** Run it with `-e RUNNER_METRICS_DEBUG=1`.
+Each hook then logs the resolved config and every emit; a `SEND FAILED` line
+means the target host couldn't be resolved/opened (wrong address, or the runner
+can't reach it):
+
+```bash
+docker logs <runner> | grep runner-metrics
+docker exec <runner> cat /tmp/runner-metrics.log
+```
+
+**Inspect a live runner** without rebuilding:
+
+```bash
+docker exec <runner> env | grep RUNNER_METRICS                       # env reached the container?
+docker exec <runner> cat /tmp/runner-metrics.state                   # idle / busy as expected?
+docker exec <runner> bash -c 'echo -n test:1\|c > /dev/udp/<host>/<port> && echo OK || echo FAIL'  # can it reach the target?
+```
+
+**Docker Desktop (macOS/Windows) note:** published **UDP** ports are unreliable
+there, so a host `-p 9125:9125/udp` may silently drop packets. For local
+testing, attach the runner to the exporter's compose network and address it by
+service name (`--network <project>_default -e RUNNER_METRICS_STATSD_ADDR=statsd-exporter:9125`)
+instead of `host.docker.internal`. Linux hosts don't have this limitation.
+
 ## Build
 
 ```bash

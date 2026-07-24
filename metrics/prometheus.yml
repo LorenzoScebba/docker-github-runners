@@ -1,0 +1,10 @@
+# Minimal Prometheus config for the example stack. The whole runner fleet is a
+# SINGLE scrape target — the statsd_exporter — regardless of how many runners
+# or EC2 hosts feed it over UDP.
+global:
+  scrape_interval: 15s
+
+scrape_configs:
+  - job_name: github-runners
+    static_configs:
+      - targets: ["statsd-exporter:9102"]
