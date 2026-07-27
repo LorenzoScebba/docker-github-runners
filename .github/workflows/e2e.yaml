@@ -17,28 +17,37 @@ permissions:
 
 jobs:
   e2e:
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.runs-on }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            platform: linux/amd64
+            runs-on: ubuntu-latest
+          - arch: arm64
+            platform: linux/arm64
+            runs-on: ubuntu-24.04-arm
     steps:
       - uses: actions/checkout@v7
-      - uses: docker/setup-qemu-action@v4
       - uses: docker/setup-buildx-action@v4
 
-      - name: Build (amd64, load)
+      - name: Build (${{ matrix.arch }}, load)
         uses: docker/build-push-action@v7
         with:
           context: .
           load: true
-          platforms: linux/amd64
+          platforms: ${{ matrix.platform }}
           build-args: |
             INSTALL_CONTAINER_TOOLS=false
-          tags: hardened-runner:e2e
+          tags: hardened-runner:e2e-${{ matrix.arch }}
 
       - name: Scan with grype
         uses: anchore/scan-action@v7
         id: grype
         continue-on-error: true
         with:
-          image: hardened-runner:e2e
+          image: hardened-runner:e2e-${{ matrix.arch }}
           fail-build: true
           severity-cutoff: critical
           only-fixed: true
@@ -48,7 +57,7 @@ jobs:
         id: grype-json
         continue-on-error: true
         with:
-          image: hardened-runner:e2e
+          image: hardened-runner:e2e-${{ matrix.arch }}
           fail-build: false
           severity-cutoff: critical
           only-fixed: true
@@ -61,6 +70,7 @@ jobs:
           sarif_file: ${{ steps.grype.outputs.sarif }}
           ref: refs/heads/${{ github.head_ref }}
           sha: ${{ github.event.pull_request.head.sha }}
+          category: grype-${{ matrix.arch }}
 
       - name: Post scan result as PR comment
         if: always()
@@ -98,8 +108,8 @@ jobs:
                 criticals.map(c => `| ${c.id} | ${c.pkg} | ${c.installed} | ${c.fixed} |`).join('\n')
               : 'No fixable critical CVEs found.';
 
-            const body = `## ${icon} grype scan\n\n${status}\n\n` +
-              `_Scan ran on \`linux/amd64\` with \`severity-cutoff: critical\` and \`only-fixed: true\`. ` +
+            const body = `## ${icon} grype scan (${{ matrix.arch }})\n\n${status}\n\n` +
+              `_Scan ran on \`${{ matrix.platform }}\` with \`severity-cutoff: critical\` and \`only-fixed: true\`. ` +
               `Ignored rules from \`.grype.yaml\` apply. Full results in the Security tab._`;
             await github.rest.issues.createComment({
               owner: context.repo.owner,
@@ -110,10 +120,10 @@ jobs:
 
       - name: Start container (override entrypoint, skip registration)
         run: |
-          docker run -d --name runner-e2e \
+          docker run -d --name runner-e2e-${{ matrix.arch }} \
             --entrypoint sleep \
             -v /var/run/docker.sock:/var/run/docker.sock \
-            hardened-runner:e2e infinity
+            hardened-runner:e2e-${{ matrix.arch }} infinity
 
       - name: Check tool availability
         run: |
@@ -131,16 +141,16 @@ jobs:
             "crane version" \
             "psql --version"; do
             echo "::group::${check}"
-            docker exec runner-e2e sh -c "${check}"
+            docker exec runner-e2e-${{ matrix.arch }} sh -c "${check}"
             echo "::endgroup::"
           done
 
       - name: Check container execution (container.image equivalent)
-        run: docker exec runner-e2e docker run --rm alpine:3.20 echo "container execution ok"
+        run: docker exec runner-e2e-${{ matrix.arch }} docker run --rm alpine:3.20 echo "container execution ok"
 
       - name: Clean up
         if: always()
-        run: docker rm -f runner-e2e || true
+        run: docker rm -f runner-e2e-${{ matrix.arch }} || true
 
       - name: Fail if grype found fixable critical CVEs
         if: steps.grype.outcome == 'failure'
