@@ -108,15 +108,34 @@ jobs:
                 criticals.map(c => `| ${c.id} | ${c.pkg} | ${c.installed} | ${c.fixed} |`).join('\n')
               : 'No fixable critical CVEs found.';
 
-            const body = `## ${icon} grype scan (${{ matrix.arch }})\n\n${status}\n\n` +
+            const marker = `<!-- e2e-grype-scan:${{ matrix.arch }} -->`;
+            const body = `${marker}\n## ${icon} grype scan (${{ matrix.arch }})\n\n${status}\n\n` +
               `_Scan ran on \`${{ matrix.platform }}\` with \`severity-cutoff: critical\` and \`only-fixed: true\`. ` +
               `Ignored rules from \`.grype.yaml\` apply. Full results in the Security tab._`;
-            await github.rest.issues.createComment({
+
+            const { data: comments } = await github.rest.issues.listComments({
               owner: context.repo.owner,
               repo: context.repo.repo,
               issue_number: context.issue.number,
-              body,
+              per_page: 100,
             });
+            const existing = comments.find(c => c.body?.includes(marker));
+
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: existing.id,
+                body,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body,
+              });
+            }
 
       - name: Start container (override entrypoint, skip registration)
         run: |
