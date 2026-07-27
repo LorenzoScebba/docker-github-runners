@@ -70,12 +70,11 @@ configure_sources() {
   echo "deb [signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesource.com/node_${NODE_MAJOR}.x nodistro main" \
     > /etc/apt/sources.list.d/nodesource.list
 
-  # Google Chrome's official repo. Google only publishes amd64 .deb packages,
-  # so the repo is scoped to arch=amd64 and simply has nothing to offer (and
-  # is never queried by install_chrome) on arm64.
+  # Google Chrome's official repo. Now publishes both amd64 and arm64 .deb
+  # packages, so no arch scoping is needed.
   curl -fsSL https://dl.google.com/linux/linux_signing_key.pub \
     | gpg --dearmor -o /etc/apt/keyrings/google-chrome.gpg
-  echo "deb [arch=amd64 signed-by=/etc/apt/keyrings/google-chrome.gpg] http://dl.google.com/linux/chrome/deb/ stable main" \
+  echo "deb [signed-by=/etc/apt/keyrings/google-chrome.gpg] http://dl.google.com/linux/chrome/deb/ stable main" \
     > /etc/apt/sources.list.d/google-chrome.list
 
   apt-get update
@@ -181,9 +180,8 @@ install_yarn() {
 # CVEs (16 Critical), the same stale-Go cluster the gosu shim removed. We
 # install Google Chrome stable from Google's own apt repo instead: a C++
 # binary grype finds nothing in, so it adds ZERO distinct CVEs over the base.
-# Google ships amd64 only, so this is guarded to amd64; the arm64 image builds
-# without a browser. Its runtime libs (libnss3/libgtk/libgbm/libasound/
-# xvfb/...) are installed in the Dockerfile's apt step.
+# Its runtime libs (libnss3/libgtk/libgbm/libasound/xvfb/...) are installed in
+# the Dockerfile's apt step.
 install_chrome() {
   apt-get install -y --no-install-recommends google-chrome-stable
   ln -sf /usr/bin/google-chrome-stable /usr/local/bin/chrome
@@ -230,7 +228,7 @@ main() {
   install_yarn
   install_crane
   install_ffmpeg
-  [[ "${DPKG_ARCH}" == "amd64" ]] && install_chrome
+  install_chrome
   [[ "${INSTALL_POWERSHELL}" == "true" ]] && install_powershell
   [[ "${INSTALL_CONTAINER_TOOLS}" == "true" ]] && install_container_tools
 

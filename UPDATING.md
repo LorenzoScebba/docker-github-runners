@@ -129,7 +129,7 @@ These pull the latest version at build time — no pin to edit, just rebuild:
 | `yq`                        | latest GitHub release                     |
 | AWS CLI v2                  | `awscli.amazonaws.com` (always latest)    |
 | PowerShell                  | latest GitHub release                     |
-| Google Chrome stable (amd64)| Google `apt` repo (`dl.google.com`)       |
+| Google Chrome stable         | Google `apt` repo (`dl.google.com`)       |
 | All OS packages             | `apt-get upgrade -y`                      |
 
 Because of these, **rebuilding on a schedule is itself an upgrade** — it picks
