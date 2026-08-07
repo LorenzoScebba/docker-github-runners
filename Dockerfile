@@ -200,6 +200,17 @@ COPY --chmod=0755 scripts/hooks/ /actions-runner/hooks/
 ENV ACTIONS_RUNNER_HOOK_JOB_STARTED=/actions-runner/hooks/job-started.sh \
     ACTIONS_RUNNER_HOOK_JOB_COMPLETED=/actions-runner/hooks/job-completed.sh
 
+# Move the runner's own config.sh aside and put config-run.sh in its place, so
+# `./config.sh` from entrypoint.sh routes through the wrapper. It briefly turns
+# on the runner's built-in HTTP trace to read the GitHub rate-limit header off
+# the registration response, then execs/returns exactly as the real script
+# would. Transparent (a plain exec of config.real.sh) unless metrics are on.
+# See README "Runner metrics" and the header of config-run.sh.
+RUN mv /actions-runner/config.sh /actions-runner/config.real.sh \
+  && cp /actions-runner/hooks/config-run.sh /actions-runner/config.sh \
+  && chmod +x /actions-runner/config.real.sh /actions-runner/config.sh \
+  && chown runner:runner /actions-runner/config.real.sh /actions-runner/config.sh
+
 # ---------------------------------------------------------------------------
 # Runtime scripts + final cache cleanup (fix #5)
 # ---------------------------------------------------------------------------

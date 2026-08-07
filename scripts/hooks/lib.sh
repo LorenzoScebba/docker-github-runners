@@ -239,3 +239,30 @@ metrics_emit_timer() {
   ( _metrics_send "${METRICS_PREFIX}_${name}:${value_ms}|ms|#${tags}" ) &
   return 0
 }
+
+# metrics_emit_gauge <name-without-prefix> <value> [tags]
+# Unlike the emitters above this does NOT derive its own tags: its caller
+# (config-run.sh) runs at registration time, before any job context exists and
+# before the runner has a name, so the usual tag builders don't apply. The
+# caller passes a fully-formed tag string instead. Synchronous, because the
+# caller exits immediately after.
+metrics_emit_gauge() {
+  metrics_enabled || return 0
+  local name="$1" value="$2" tags="${3:-}"
+  _metrics_send "${METRICS_PREFIX}_${name}:${value}|g|#${tags}"
+  return 0
+}
+
+# metrics_registration_tags — labels for the registration-time gauge. There is
+# no `runner` label on purpose: the value describes the shared PAT / App
+# installation budget, not a property of whichever runner happened to observe
+# it, and one series per ephemeral runner would be exactly the cardinality
+# blow-up the counters avoid. `labels` mirrors entrypoint.sh's own _LABELS
+# fallback so runner pools can be told apart; it is a comma-separated list, and
+# _metrics_sanitize collapses the commas so it survives as ONE tag value.
+metrics_registration_tags() {
+  local org labels
+  org="$(_metrics_sanitize "${ORG_NAME:-}")"
+  labels="$(_metrics_sanitize "${RUNNER_LABELS:-${LABELS:-default}}")"
+  _metrics_join "${org:+org:${org}}" "${labels:+labels:${labels}}" "${METRICS_EXTRA_LABELS}"
+}

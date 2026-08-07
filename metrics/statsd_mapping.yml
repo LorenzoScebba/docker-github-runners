@@ -38,3 +38,14 @@ mappings:
     histogram_options:
       buckets: [10, 30, 60, 120, 300, 600, 1200, 1800, 3600]
     name: "github_runner_job_duration_seconds"
+
+  # GitHub REST budget left, read off the registration response headers (see
+  # README "Runner metrics"). Emitted once per runner registration, not on an
+  # interval, so the TTL only has to outlive the gaps between registrations —
+  # it exists so the series goes stale instead of showing a frozen number
+  # forever after the fleet scales to zero. Raise it if your runners churn
+  # less often than this.
+  - match: "github_runner_api_rate_limit_remaining"
+    match_metric_type: gauge
+    name: "github_runner_api_rate_limit_remaining"
+    ttl: 30m
