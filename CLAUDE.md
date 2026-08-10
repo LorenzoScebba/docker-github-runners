@@ -81,6 +81,29 @@ on. It lives at `/usr/sbin/gosu` in the image so `entrypoint.sh` (`/usr/sbin/gos
 `entrypoint.sh` handles runner registration via GitHub App (`APP_ID`/`APP_PRIVATE_KEY`) or PAT (`ACCESS_TOKEN`), deregistration on SIGTERM/EXIT, optional
 `RUN_AS_ROOT`, and docker GID reconciliation for socket mounts.
 
+### Metrics hooks (`scripts/hooks/`)
+
+Opt-in fleet observability, gated entirely on `RUNNER_METRICS_STATSD_ADDR` — unset and every script below is a no-op/passthrough, so the image stays a
+byte-for-byte drop-in. Delivery is statsd-over-UDP through bash's `/dev/udp`, deliberately adding **no package** (and no CVE surface) to the image. See the
+README "Runner metrics" section for the operator-facing docs.
+
+`lib.sh` is the shared library (sourced, never executed); the rest are entry points wired up in the Dockerfile:
+
+| Script            | Wired up as                                                        | Reports                                                    |
+|-------------------|--------------------------------------------------------------------|------------------------------------------------------------|
+| `runner-run.sh`   | `CMD` wrapper around `Runner.Listener`                              | seeds idle state, forks `heartbeat.sh` + the offline watcher |
+| `heartbeat.sh`    | forked by `runner-run.sh`                                           | re-emits the idle/busy gauge on an interval (TTL self-heal)  |
+| `job-started.sh`  | `ACTIONS_RUNNER_HOOK_JOB_STARTED`                                   | flips state to busy; `jobs_started_total`                    |
+| `job-completed.sh`| `ACTIONS_RUNNER_HOOK_JOB_COMPLETED`                                 | back to idle; `jobs_completed_total` + duration              |
+| `config-run.sh`   | **installed as `/actions-runner/config.sh`**; the runner's own script is moved to `config.real.sh` | `api_rate_limit_remaining` at registration |
+
+**Do not "simplify" the `config-run.sh` indirection.** The rate-limit header is only ever on the response to the registration call `Runner.Listener` makes
+internally over TLS, so no runtime script can observe it directly — and a pre-minted `RUNNER_TOKEN` deployment has no credential left in the container to ask
+`/rate_limit` with afterwards. The wrapper works by enabling the runner's own `GITHUB_ACTIONS_RUNNER_HTTPTRACE` for the registration invocation *only*, then
+parsing `_diag/Runner_*.log`. Two constraints are load-bearing: it must preserve `config.sh`'s exit code (`entrypoint.sh` aborts the container on a failed
+registration), and the trace must never be set as a plain image-level `ENV` — that would dump every job's HTTP traffic for the runner's whole lifetime.
+The interception works because `entrypoint.sh` invokes `./config.sh` relative to `/actions-runner`, so the wrapper needs no change to any protected file.
+
 ### CI workflow (`build.yml`)
 
 Single `workflow_dispatch` trigger. Steps in order:

@@ -188,6 +188,30 @@ RUN mkdir -p /opt/hostedtoolcache \
   && chown -R runner /_work /actions-runner /opt/hostedtoolcache
 
 # ---------------------------------------------------------------------------
+# Prometheus metrics hooks (opt-in via RUNNER_METRICS_STATSD_ADDR at runtime).
+# The runner invokes job-started/completed.sh at each job boundary; the CMD is
+# wrapped by runner-run.sh so an idle runner is observable too. Emission is
+# statsd-over-UDP using bash's built-in /dev/udp — no new package, no CVE
+# delta. When RUNNER_METRICS_STATSD_ADDR is unset the hooks are no-ops and the
+# wrapper is a transparent passthrough, so behaviour is identical to upstream.
+# See README "Runner metrics".
+# ---------------------------------------------------------------------------
+COPY --chmod=0755 scripts/hooks/ /actions-runner/hooks/
+ENV ACTIONS_RUNNER_HOOK_JOB_STARTED=/actions-runner/hooks/job-started.sh \
+    ACTIONS_RUNNER_HOOK_JOB_COMPLETED=/actions-runner/hooks/job-completed.sh
+
+# Move the runner's own config.sh aside and put config-run.sh in its place, so
+# `./config.sh` from entrypoint.sh routes through the wrapper. It briefly turns
+# on the runner's built-in HTTP trace to read the GitHub rate-limit header off
+# the registration response, then execs/returns exactly as the real script
+# would. Transparent (a plain exec of config.real.sh) unless metrics are on.
+# See README "Runner metrics" and the header of config-run.sh.
+RUN mv /actions-runner/config.sh /actions-runner/config.real.sh \
+  && cp /actions-runner/hooks/config-run.sh /actions-runner/config.sh \
+  && chmod +x /actions-runner/config.real.sh /actions-runner/config.sh \
+  && chown runner:runner /actions-runner/config.real.sh /actions-runner/config.sh
+
+# ---------------------------------------------------------------------------
 # Runtime scripts + final cache cleanup (fix #5)
 # ---------------------------------------------------------------------------
 COPY scripts/token.sh scripts/entrypoint.sh scripts/app_token.sh /
@@ -195,4 +219,6 @@ RUN chmod +x /token.sh /entrypoint.sh /app_token.sh \
   && rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
 
 ENTRYPOINT ["/entrypoint.sh"]
-CMD ["./bin/Runner.Listener", "run", "--startuptype", "service"]
+# CMD is wrapped by runner-run.sh (transparent unless metrics are enabled) so
+# an idle runner can report itself; it execs the listener below unchanged.
+CMD ["/actions-runner/hooks/runner-run.sh", "./bin/Runner.Listener", "run", "--startuptype", "service"]

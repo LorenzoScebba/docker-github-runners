@@ -1,0 +1,51 @@
+# statsd_exporter mapping for the hardened-runner metrics hooks.
+#
+# The runners emit dogstatsd-tagged statsd over UDP; statsd_exporter turns the
+# tags into Prometheus labels (dogstatsd tag parsing is on by default). Only the
+# per-metric TTL and the duration histogram buckets need explicit mappings —
+# everything else would auto-map, but the metrics are listed here for clarity.
+#
+# Load with: --statsd.mapping-config=/etc/statsd/statsd_mapping.yml
+#
+# No `defaults.ttl` is set: statsd_exporter's built-in default is "never expire",
+# which is exactly what the cumulative counters / histogram want. Only the live
+# status gauge overrides it (below) so that dead runners self-heal.
+
+mappings:
+  # Live idle/busy gauge, one series per runner. Expire quickly so a runner that
+  # vanished (finished + exited, or was SIGKILL'd mid-job) drops out of
+  # `sum by (state)` within a few missed heartbeats instead of lingering.
+  # Keep this >= 2x RUNNER_METRICS_HEARTBEAT_INTERVAL (default 15s -> 45s).
+  # Raise it if you raise the heartbeat interval.
+  - match: "github_runner_status"
+    match_metric_type: gauge
+    name: "github_runner_status"
+    ttl: 45s
+
+  # Job throughput counters (aggregated across all runners by label set).
+  - match: "github_runner_jobs_started_total"
+    match_metric_type: counter
+    name: "github_runner_jobs_started_total"
+  - match: "github_runner_jobs_completed_total"
+    match_metric_type: counter
+    name: "github_runner_jobs_completed_total"
+
+  # Job duration. Emitted in milliseconds with the statsd `ms` type;
+  # statsd_exporter converts ms -> seconds, so the buckets below are seconds.
+  - match: "github_runner_job_duration_seconds"
+    match_metric_type: observer
+    observer_type: histogram
+    histogram_options:
+      buckets: [10, 30, 60, 120, 300, 600, 1200, 1800, 3600]
+    name: "github_runner_job_duration_seconds"
+
+  # GitHub REST budget left, read off the registration response headers (see
+  # README "Runner metrics"). Emitted once per runner registration, not on an
+  # interval, so the TTL only has to outlive the gaps between registrations —
+  # it exists so the series goes stale instead of showing a frozen number
+  # forever after the fleet scales to zero. Raise it if your runners churn
+  # less often than this.
+  - match: "github_runner_api_rate_limit_remaining"
+    match_metric_type: gauge
+    name: "github_runner_api_rate_limit_remaining"
+    ttl: 30m

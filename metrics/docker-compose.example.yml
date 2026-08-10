@@ -1,0 +1,35 @@
+# Example central metrics collector for the hardened runner fleet.
+#
+# Topology: ONE statsd_exporter for the whole fleet (not one per host). Every
+# runner on every EC2 sends statsd/UDP here; Prometheus scrapes this one
+# exporter. Point runners at it with:
+#
+#   docker run ... \
+#     -e RUNNER_METRICS_STATSD_ADDR=<host-running-this-stack>:9125 \
+#     ghcr.io/lorenzoscebba/docker-github-runners:<tag>
+#
+# In production put a stable address in front of the exporter (private DNS name
+# or an internal NLB) and open its UDP/9125 to the runner instances' security
+# group. This compose file is a local demo, not a production deployment.
+
+services:
+  statsd-exporter:
+    image: prom/statsd-exporter:v0.28.0  # pin to your preferred release
+    command:
+      - "--statsd.mapping-config=/etc/statsd/statsd_mapping.yml"
+      - "--statsd.listen-udp=:9125"
+      - "--web.listen-address=:9102"
+    volumes:
+      - ./statsd_mapping.yml:/etc/statsd/statsd_mapping.yml:ro
+    ports:
+      - "9125:9125/udp"   # statsd ingest: runners -> exporter
+      - "9102:9102"       # Prometheus scrape target (/metrics)
+
+  prometheus:
+    image: prom/prometheus:v3.1.0
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    ports:
+      - "9090:9090"
+    depends_on:
+      - statsd-exporter

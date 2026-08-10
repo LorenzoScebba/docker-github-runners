@@ -42,6 +42,13 @@ longer needed.
 
 ## Verification still owed
 
+- [ ] **Runner version bumps may move the HTTP trace format.** The wrapper
+  parses `Runner_*.log` for the `HttpRequestOut.Stop` event emitted under
+  `GITHUB_ACTIONS_RUNNER_HTTPTRACE=true`. That format is an implementation
+  detail of the .NET `System.Net.Http` EventSource, not a documented contract —
+  re-confirm the metric still appears after a `GH_RUNNER_VERSION` bump. Failure
+  mode is fail-open (no metric, registration untouched).
+
 - [ ] **Full image build + grype scan not yet run end-to-end.** Individual
   pieces were component-tested (git-lfs compiles with the bump; helm 3.21.2 and
   NodeSource node 24 binaries are clean), but a complete `docker build` +
