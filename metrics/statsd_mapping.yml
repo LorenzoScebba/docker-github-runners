@@ -12,9 +12,10 @@
 # status gauge overrides it (below) so that dead runners self-heal.
 
 mappings:
-  # Live idle/busy gauge, one series per runner. Expire quickly so a runner that
-  # vanished (finished + exited, or was SIGKILL'd mid-job) drops out of
-  # `sum by (state)` within a few missed heartbeats instead of lingering.
+  # Live idle/busy gauge, one series per runner pool (`labels`). Expire quickly
+  # so a runner that vanished (finished + exited, or was SIGKILL'd mid-job)
+  # drops out of `sum by (state)` within a few missed heartbeats instead of
+  # lingering.
   # Keep this >= 2x RUNNER_METRICS_HEARTBEAT_INTERVAL (default 15s -> 45s).
   # Raise it if you raise the heartbeat interval.
   - match: "github_runner_status"

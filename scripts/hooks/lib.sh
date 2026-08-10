@@ -134,12 +134,15 @@ _metrics_org() {
 
 # --- tag builders ------------------------------------------------------------
 
-# Tags carried by the per-runner status gauge: runner + org + static extras.
+# Tags carried by the status gauge: labels + static extras. No runner/org —
+# one series per runner identity is exactly the cardinality blow-up the fleet
+# counters avoid; `labels` mirrors entrypoint.sh's own _LABELS fallback so
+# runner pools can be told apart. See metrics_registration_tags for the same
+# convention on the registration-time gauge.
 metrics_gauge_base_tags() {
-  local runner org
-  runner="$(_metrics_sanitize "$(_metrics_runner_name)")"
-  org="$(_metrics_sanitize "$(_metrics_org)")"
-  _metrics_join "runner:${runner}" "${org:+org:${org}}" "${METRICS_EXTRA_LABELS}"
+  local labels
+  labels="$(_metrics_sanitize "${RUNNER_LABELS:-${LABELS:-default}}")"
+  _metrics_join "${labels:+labels:${labels}}" "${METRICS_EXTRA_LABELS}"
 }
 
 # Tags describing the job currently being run, derived from the GitHub job
@@ -158,12 +161,12 @@ metrics_context_busy_tags() {
     "${event:+event:${event}}"
 }
 
-# Tags for throughput counters/timers: org + job context + static extras
-# (deliberately no runner label).
+# Tags for throughput counters/timers: labels (runner pool) + job context +
+# static extras (deliberately no runner/org label — see metrics_gauge_base_tags).
 metrics_context_fleet_tags() {
-  local org
-  org="$(_metrics_sanitize "$(_metrics_org)")"
-  _metrics_join "${org:+org:${org}}" "$(metrics_context_busy_tags)" "${METRICS_EXTRA_LABELS}"
+  local labels
+  labels="$(_metrics_sanitize "${RUNNER_LABELS:-${LABELS:-default}}")"
+  _metrics_join "${labels:+labels:${labels}}" "$(metrics_context_busy_tags)" "${METRICS_EXTRA_LABELS}"
 }
 
 # --- state file --------------------------------------------------------------
@@ -188,10 +191,11 @@ metrics_read_state() {
 
 # --- emitters ----------------------------------------------------------------
 
-# Emit the per-runner status gauge for BOTH states every call — exactly one is
-# 1, the other 0 — so `sum by (state) (github_runner_status)` is always
-# correct and a lost packet self-corrects next tick. statsd_exporter's TTL
-# expires the series shortly after the runner stops emitting (self-heal).
+# Emit the status gauge for BOTH states every call — exactly one is 1, the
+# other 0 — so `sum by (state) (github_runner_status)` self-corrects on a lost
+# packet. statsd_exporter's TTL expires the series shortly after the runner
+# stops emitting (self-heal). Tags carry `labels` (the runner pool), not
+# `runner`/`org` — see metrics_gauge_base_tags.
 metrics_emit_status() {
   metrics_enabled || return 0
   local base idle_val busy_val busy_series
@@ -254,15 +258,14 @@ metrics_emit_gauge() {
 }
 
 # metrics_registration_tags — labels for the registration-time gauge. There is
-# no `runner` label on purpose: the value describes the shared PAT / App
+# no `runner`/`org` label on purpose: the value describes the shared PAT / App
 # installation budget, not a property of whichever runner happened to observe
 # it, and one series per ephemeral runner would be exactly the cardinality
 # blow-up the counters avoid. `labels` mirrors entrypoint.sh's own _LABELS
 # fallback so runner pools can be told apart; it is a comma-separated list, and
 # _metrics_sanitize collapses the commas so it survives as ONE tag value.
 metrics_registration_tags() {
-  local org labels
-  org="$(_metrics_sanitize "${ORG_NAME:-}")"
+  local labels
   labels="$(_metrics_sanitize "${RUNNER_LABELS:-${LABELS:-default}}")"
-  _metrics_join "${org:+org:${org}}" "${labels:+labels:${labels}}" "${METRICS_EXTRA_LABELS}"
+  _metrics_join "${labels:+labels:${labels}}" "${METRICS_EXTRA_LABELS}"
 }

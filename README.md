@@ -1,11 +1,9 @@
 # Hardened self-hosted GitHub Actions runner
 
 A drop-in replacement for [`myoung34/github-runner`](https://github.com/myoung34/docker-github-actions-runner)
-on the **Ubuntu 24.04 (noble)** line, rebuilt to remove the vulnerability
-cluster that dominates the upstream image's scan results.
+on the **Ubuntu 24.04 (noble)** line, rebuilt to remove the vulnerability cluster that dominates the upstream image's scan results.
 
-It keeps the same entrypoint and environment-variable contract, so existing
-deployments work without changes — only the image reference changes.
+It keeps the same entrypoint and environment-variable contract, so existing deployments work without changes — only the image reference changes.
 
 The remaining Criticals have a fix but no remediation path yet — `CVE-2026-6100`
 (python in aws-cli) and `GO-2026-5026` (`x/net` in kubectl); see
@@ -55,34 +53,25 @@ Supported env vars match upstream: `ACCESS_TOKEN` or `APP_ID`/`APP_PRIVATE_KEY`
 
 For ephemeral deployments (`EPHEMERAL=1`), set **`DISABLE_AUTOMATIC_DEREGISTRATION=true`**.
 
-An ephemeral runner processes exactly one job, then removes its own
-registration from GitHub and exits. By the time the container's exit trap
-fires, the runner is already gone — so the automatic deregistration path
-(`entrypoint.sh` → `token.sh` → `config.sh remove`) mints a **second**
+An ephemeral runner processes exactly one job, then removes its own registration from GitHub and exits. By the time the container's exit trap fires, the runner
+is already gone — so the automatic deregistration path (`entrypoint.sh` → `token.sh` → `config.sh remove`) mints a **second**
 runner-registration token purely to run a no-op removal. With `ACCESS_TOKEN`
-auth that doubles the calls to GitHub's `registration-token` endpoint per
-runner (worse with `APP_ID`/`APP_PRIVATE_KEY`, which also re-lists app
-installations); at churn this trips the PAT's 5,000/hr primary limit and
-GitHub's secondary burst limit. Disabling deregistration for ephemeral runners
-removes the redundant call.
+auth that doubles the calls to GitHub's `registration-token` endpoint per runner (worse with `APP_ID`/`APP_PRIVATE_KEY`, which also re-lists app installations);
+at churn this trips the PAT's 5,000/hr primary limit and GitHub's secondary burst limit. Disabling deregistration for ephemeral runners removes the redundant
+call.
 
 This is safe for ephemeral runners:
 
 - The startup registration is unchanged — the runner still registers normally.
-- A runner killed *before* it picks up a job won't self-deregister and will
-  leave an offline entry, but GitHub automatically removes an ephemeral runner
-  that hasn't connected for more than **1 day** (vs. 14 days for
-  non-ephemeral), so ghosts self-expire. With the default
-  `RANDOM_RUNNER_SUFFIX=true` + `--replace`, they never block new
-  registrations.
+- A runner killed *before* it picks up a job won't self-deregister and will leave an offline entry, but GitHub automatically removes an ephemeral runner that
+  hasn't connected for more than **1 day** (vs. 14 days for non-ephemeral), so ghosts self-expire. With the default
+  `RANDOM_RUNNER_SUFFIX=true` + `--replace`, they never block new registrations.
 
-**Do not** set this on non-ephemeral runners — those never self-deregister, so
-disabling it genuinely leaks registrations (lingering the full 14 days).
+**Do not** set this on non-ephemeral runners — those never self-deregister, so disabling it genuinely leaks registrations (lingering the full 14 days).
 
 #### Prefer a pre-minted `RUNNER_TOKEN` over `APP_ID`/`APP_PRIVATE_KEY` at scale
 
-The auth method determines how many *token-minting* REST calls each runner makes
-before it can register — these are the calls that scale per-runner and consume
+The auth method determines how many *token-minting* REST calls each runner makes before it can register — these are the calls that scale per-runner and consume
 the org/App rate budget:
 
 | Passed to the container      | Token-minting REST calls per runner | Endpoint(s) hit                                                                   |
@@ -92,19 +81,14 @@ the org/App rate budget:
 | `RUNNER_TOKEN` (pre-minted)  | **0**                               | none — the token is used directly                                                 |
 
 These counts are *on top of* the runner's own registration handshake:
-`config.sh --token … --replace` always contacts GitHub once to register the
-runner, and that happens identically for every auth method — it's intrinsic to
-registering a runner and can't be avoided. What the table above measures is the
-*extra* per-runner token minting that a pre-supplied `RUNNER_TOKEN` removes.
+`config.sh --token … --replace` always contacts GitHub once to register the runner, and that happens identically for every auth method — it's intrinsic to
+registering a runner and can't be avoided. What the table above measures is the *extra* per-runner token minting that a pre-supplied `RUNNER_TOKEN` removes.
 
-With App auth, every single runner re-lists the app's installations and mints a
-fresh installation token *and* a registration token — so a burst of runners
-hammers the App with three of these calls each, which is what trips the
-secondary rate limit fastest. `POST .../registration-token` counts against the
-core REST rate limit (see [actions/runner#1386](https://github.com/actions/runner/issues/1386)).
+With App auth, every single runner re-lists the app's installations and mints a fresh installation token *and* a registration token — so a burst of runners
+hammers the App with three of these calls each, which is what trips the secondary rate limit fastest. `POST .../registration-token` counts against the core REST
+rate limit (see [actions/runner#1386](https://github.com/actions/runner/issues/1386)).
 
-A runner-registration token is **valid for 1 hour and can register many
-runners**, so the leanest pattern is to mint one centrally and reuse it:
+A runner-registration token is **valid for 1 hour and can register many runners**, so the leanest pattern is to mint one centrally and reuse it:
 
 ```bash
 # Mint once (e.g. in your scale-up controller), reuse for every runner
@@ -120,65 +104,46 @@ docker run -d \
   ghcr.io/lorenzoscebba/docker-github-runners:2.335.1-ubuntu-noble
 ```
 
-Pass **only** `RUNNER_TOKEN` — do not also set `ACCESS_TOKEN` or `APP_ID`, or
-the entrypoint will discard your token and mint a new one via the API anyway
-(`entrypoint.sh` regenerates whenever `ACCESS_TOKEN`/`APP_ID` is present). This
-takes the per-runner *token-minting* calls to zero and hits the App/PAT roughly
-once per hour regardless of how many runners you churn. Each runner still
-performs its own one-time `config.sh` registration handshake — that's
-unavoidable and the same under any auth method.
+Pass **only** `RUNNER_TOKEN` — do not also set `ACCESS_TOKEN` or `APP_ID`, or the entrypoint will discard your token and mint a new one via the API anyway
+(`entrypoint.sh` regenerates whenever `ACCESS_TOKEN`/`APP_ID` is present). This takes the per-runner *token-minting* calls to zero and hits the App/PAT roughly
+once per hour regardless of how many runners you churn. Each runner still performs its own one-time `config.sh` registration handshake — that's unavoidable and
+the same under any auth method.
 
 ## Runner metrics
 
-Fleet observability normally means polling GitHub's REST API to enumerate
-runners and their state (e.g. `github-org-runner-exporter`) — **N calls that
-compete for the very rate-limit budget** the ephemeral-runner path above is
-trying to conserve. Instead, each runner **pushes** its own metrics, so the
-GitHub API is never touched for observability.
+Fleet observability normally means polling GitHub's REST API to enumerate runners and their state (e.g. `github-org-runner-exporter`) — **N calls that compete
+for the very rate-limit budget** the ephemeral-runner path above is trying to conserve. Instead, each runner **pushes** its own metrics, so the GitHub API is
+never touched for observability.
 
-The runner reports **whether it is idle or busy, and which workflow/job it is
-running when busy**, plus job throughput and duration. It is **off by default**:
-with `RUNNER_METRICS_STATSD_ADDR` unset the hooks are no-ops and the image
-behaves exactly like upstream — enabling it adds **no new package** to the image
-(emission is statsd-over-UDP via bash's built-in `/dev/udp`, so the grype scan
-is unchanged).
+The runner reports **whether it is idle or busy, and which workflow/job it is running when busy**, plus job throughput and duration. It is **off by default**:
+with `RUNNER_METRICS_STATSD_ADDR` unset the hooks are no-ops and the image behaves exactly like upstream — enabling it adds **no new package** to the image
+(emission is statsd-over-UDP via bash's built-in `/dev/udp`, so the grype scan is unchanged).
 
 ### How it works
 
-Ephemeral runners live for one job (often <1 min), so Prometheus can't scrape
-them directly — they push instead. A container reports its state via a set of
+Ephemeral runners live for one job (often <1 min), so Prometheus can't scrape them directly — they push instead. A container reports its state via a set of
 in-image scripts under `/actions-runner/hooks/`:
 
-- a **CMD wrapper** launches a background **heartbeat** that re-emits this
-  runner's `idle`/`busy` gauge every `RUNNER_METRICS_HEARTBEAT_INTERVAL`;
-- the runner's **job-started / job-completed hooks** flip that state (and emit
-  the job counters + duration);
+- a **CMD wrapper** launches a background **heartbeat** that re-emits this runner's `idle`/`busy` gauge every `RUNNER_METRICS_HEARTBEAT_INTERVAL`;
+- the runner's **job-started / job-completed hooks** flip that state (and emit the job counters + duration);
 - a **config wrapper** reports the GitHub API budget left at registration (see
   [below](#github-api-budget)).
 
-All runners across all hosts send UDP to **one central `statsd_exporter`**,
-which Prometheus scrapes as a single target. Because `runner` is a label, N
-runners land as N distinct series in one place — that fan-in is what replaces
-the N GitHub API calls.
+All runners across all hosts send UDP to **one central `statsd_exporter`**, which Prometheus scrapes as a single target. Because `runner` is a label, N runners
+land as N distinct series in one place — that fan-in is what replaces the N GitHub API calls.
 
 ```
 runners (all hosts) ──UDP:9125──▶ statsd_exporter ──scrape:9102──▶ Prometheus
 ```
 
-The heartbeat re-emitting on an interval is also the **self-heal**: a runner
-killed mid-job stops refreshing, and `statsd_exporter`'s per-metric TTL expires
-its series a few missed heartbeats later — so a `SIGKILL`'d container drops out
-of the counts instead of showing "busy" forever.
+The heartbeat re-emitting on an interval is also the **self-heal**: a runner killed mid-job stops refreshing, and `statsd_exporter`'s per-metric TTL expires its
+series a few missed heartbeats later — so a `SIGKILL`'d container drops out of the counts instead of showing "busy" forever.
 
-A graceful stop doesn't have to wait for that TTL, though: the CMD wrapper
-forks a small watcher alongside `exec`-ing into `Runner.Listener` (same PID,
-so the watcher just polls for it to disappear) and, the instant it exits,
-sends one last `idle:0`/`busy:0` pair — clearing the runner out of `sum by
-(state)` immediately instead of lingering for up to the TTL. This is what
-catches an **idle** runner being stopped (`docker stop` / scale-down with no
-job running), which no job hook ever sees. A `SIGKILL` of the whole container
-still takes the watcher out with everything else — that case has no code path
-left to run and continues to rely on the TTL.
+A graceful stop doesn't have to wait for that TTL, though: the CMD wrapper forks a small watcher alongside `exec`-ing into `Runner.Listener` (same PID, so the
+watcher just polls for it to disappear) and, the instant it exits, sends one last `idle:0`/`busy:0` pair — clearing the runner out of `sum by
+(state)` immediately instead of lingering for up to the TTL. This is what catches an **idle** runner being stopped (`docker stop` / scale-down with no job
+running), which no job hook ever sees. A `SIGKILL` of the whole container still takes the watcher out with everything else — that case has no code path left to
+run and continues to rely on the TTL.
 
 ### Enable it
 
@@ -202,19 +167,19 @@ docker run -d \
 
 ### Metrics exposed
 
-| Metric                                   | Type          | Labels                                                                                 |
-|------------------------------------------|---------------|----------------------------------------------------------------------------------------|
-| `github_runner_status`                   | gauge (TTL'd) | `runner`, `org`, `state` (`idle`\|`busy`); + `repo`,`workflow`,`job`,`event` when busy |
-| `github_runner_jobs_started_total`       | counter       | `org`, `repo`, `workflow`, `job`, `event`                                              |
-| `github_runner_jobs_completed_total`     | counter       | `org`, `repo`, `workflow`, `job`, `event`                                              |
-| `github_runner_job_duration_seconds`     | histogram     | `org`, `repo`, `workflow`, `job`, `event`                                              |
-| `github_runner_api_rate_limit_remaining` | gauge (TTL'd) | `org`, `labels`                                                                        |
+| Metric                                   | Type          | Labels                                                                          |
+|------------------------------------------|---------------|---------------------------------------------------------------------------------|
+| `github_runner_status`                   | gauge (TTL'd) | `labels`, `state` (`idle`\|`busy`); + `repo`,`workflow`,`job`,`event` when busy |
+| `github_runner_jobs_started_total`       | counter       | `labels`, `repo`, `workflow`, `job`, `event`                                    |
+| `github_runner_jobs_completed_total`     | counter       | `labels`, `repo`, `workflow`, `job`, `event`                                    |
+| `github_runner_job_duration_seconds`     | histogram     | `labels`, `repo`, `workflow`, `job`, `event`                                    |
+| `github_runner_api_rate_limit_remaining` | gauge (TTL'd) | `labels`                                                                        |
 
 ```promql
-# Live free vs busy across the whole fleet
-sum by (state) (github_runner_status)
+# Live free vs busy across the whole fleet, broken down by runner pool
+sum by (labels, state) (github_runner_status)
 
-# Exactly which workflow/job each busy runner is running
+# Which workflow/job is running per busy pool
 github_runner_status{state="busy"} == 1
 
 # Throughput and p95 job duration
@@ -226,85 +191,70 @@ min(github_runner_api_rate_limit_remaining)
 ```
 
 Cardinality is kept bounded on purpose: unbounded fields (`run_id`, `sha`,
-`actor`) are **never** used as labels, and `runner` appears only on the TTL'd
-gauge, so churned runners expire rather than accumulate.
+`actor`) are **never** used as labels, and neither `runner` nor `org` appear
+on any metric — pools are told apart by `labels` (from `RUNNER_LABELS`/
+`LABELS`) alone. This means `github_runner_status` is per-pool, not
+per-runner: when several runners share the same `labels` value, each writes
+the same `idle`/`busy` series, and — being a gauge — the last write wins
+rather than summing. Use `sum by (state) (...)` for "is at least one runner in
+this pool busy", not for a per-runner count.
 
 ### GitHub API budget
 
-Registering a runner costs one request against GitHub's
-**`actions_runner_registration`** rate-limit resource, and at churn that budget
-is the thing most likely to break a fleet — so
+Registering a runner costs one request against GitHub's **`actions_runner_registration`** rate-limit resource, and at churn that budget is the thing most likely
+to break a fleet — so
 `github_runner_api_rate_limit_remaining` reports how much of it is left.
 
-Note this is its **own bucket**, not the core REST budget: GitHub answers the
-registration call with `x-ratelimit-resource: actions_runner_registration`, so
-this number moves independently of the 5,000/hr PAT (or 15,000/hr App) core
-limit that [token minting](#rate-limiting--ephemeral-runners) draws on. It is
-the one that scales with how fast you churn runners.
+Note this is its **own bucket**, not the core REST budget: GitHub answers the registration call with `x-ratelimit-resource: actions_runner_registration`, so
+this number moves independently of the 5,000/hr PAT (or 15,000/hr App) core limit that [token minting](#rate-limiting--ephemeral-runners) draws on. It is the
+one that scales with how fast you churn runners.
 
 Getting that number is less obvious than it looks. It lives on the
-`X-RateLimit-Remaining` response header of the registration call the runner
-makes **itself** (`POST .../actions/runner-registration`), which happens
-inside `Runner.Listener` over TLS — no runtime script ever sees it. Asking
-GitHub afterwards isn't an option either: at scale the recommended setup
-passes a [pre-minted `RUNNER_TOKEN`](#prefer-a-pre-minted-runner_token-over-app_idapp_private_key-at-scale),
-so there is no PAT or App key in the container to call `/rate_limit` with —
-and spending an API request to measure the API budget is self-defeating.
+`X-RateLimit-Remaining` response header of the registration call the runner makes **itself** (`POST .../actions/runner-registration`), which happens inside
+`Runner.Listener` over TLS — no runtime script ever sees it. Asking GitHub afterwards isn't an option either: at scale the recommended setup passes
+a [pre-minted `RUNNER_TOKEN`](#prefer-a-pre-minted-runner_token-over-app_idapp_private_key-at-scale), so there is no PAT or App key in the container to call
+`/rate_limit` with — and spending an API request to measure the API budget is self-defeating.
 
-Instead we read the response the runner already received. The runner has a
-built-in `GITHUB_ACTIONS_RUNNER_HTTPTRACE` mode that dumps its HTTP traffic —
-headers included — into its own diag log. The image installs a wrapper as
+Instead we read the response the runner already received. The runner has a built-in `GITHUB_ACTIONS_RUNNER_HTTPTRACE` mode that dumps its HTTP traffic — headers
+included — into its own diag log. The image installs a wrapper as
 `/actions-runner/config.sh` (the runner's own script is moved to
-`config.real.sh`) which turns that trace on **for the registration invocation
-only**, pulls `X-RateLimit-Remaining` off the registration response, emits it,
-and returns the real script's exit code untouched. **Zero extra API calls.**
+`config.real.sh`) which turns that trace on **for the registration invocation only**, pulls `X-RateLimit-Remaining` off the registration response, emits it, and
+returns the real script's exit code untouched. **Zero extra API calls.**
 
 Worth knowing:
 
-- **The trace is scoped to registration.** `Runner.Listener` runs as a separate
-  process without the variable set, so no job traffic is ever dumped.
-- **No secrets land in the log.** .NET redacts the auth header
-  (`Authorization: RemoteAuth ***`) and never dumps request/response bodies —
-  verified against a mock: the registration token appears zero times. The cost
-  is a few KB of extra headers in `_diag` (~24 KB total for a config run).
-- **It is emitted on failed registrations too** — a 403 from an exhausted
-  budget is exactly when the number matters most.
-- **Fleet-scoped, not per-runner.** The value describes the shared PAT/App
-  budget, so there is deliberately no `runner` label; `org` and `labels`
-  (from `RUNNER_LABELS`/`LABELS`) separate distinct runner pools.
-- **It's a snapshot, not a poll** — the reading is from whichever runner
-  registered most recently, so read it as "this much was left as of the last
-  registration". With metrics disabled the wrapper is a plain `exec` of the
-  real script and none of this happens.
-- **Long-lived runners only:** if the runner auto-updates itself in place
-  (not the case for ephemeral containers, which are recreated from the image)
-  it restores its own `config.sh` and the metric silently stops. Registration
-  is unaffected.
+- **The trace is scoped to registration.** `Runner.Listener` runs as a separate process without the variable set, so no job traffic is ever dumped.
+- **No secrets land in the log.** .NET redacts the auth header (`Authorization: RemoteAuth ***`) and never dumps request/response bodies — verified against a
+  mock: the registration token appears zero times. The cost is a few KB of extra headers in `_diag` (~24 KB total for a config run).
+- **It is emitted on failed registrations too** — a 403 from an exhausted budget is exactly when the number matters most.
+- **Fleet-scoped, not per-runner.** The value describes the shared PAT/App budget, so there is deliberately no `runner` label; `labels`
+  (from `RUNNER_LABELS`/`LABELS`) separates distinct runner pools.
+- **It's a snapshot, not a poll** — the reading is from whichever runner registered most recently, so read it as "this much was left as of the last
+  registration". With metrics disabled the wrapper is a plain `exec` of the real script and none of this happens.
+- **Long-lived runners only:** if the runner auto-updates itself in place (not the case for ephemeral containers, which are recreated from the image)
+  it restores its own `config.sh` and the metric silently stops. Registration is unaffected.
 
 ### Deploying the collector
 
 Example artifacts live in [`metrics/`](metrics/): a
-[`statsd_mapping.yml`](metrics/statsd_mapping.yml) (per-metric TTLs + duration
-histogram buckets) and a [`docker-compose.example.yml`](metrics/docker-compose.example.yml)
+[`statsd_mapping.yml`](metrics/statsd_mapping.yml) (per-metric TTLs + duration histogram buckets) and a [
+`docker-compose.example.yml`](metrics/docker-compose.example.yml)
 running a single `statsd_exporter` + Prometheus. For a quick local look:
 
 ```bash
 docker compose -f metrics/docker-compose.example.yml up
 ```
 
-In production, front the exporter with a stable address (private DNS or an
-internal NLB), open its **UDP/9125** to the runner instances' security group,
-and set the gauge TTL in `statsd_mapping.yml` to a bit above your longest job.
-Cross-host UDP can drop under load, but that's harmless here — the heartbeat
-re-sends every interval, so a lost packet self-corrects on the next tick.
+In production, front the exporter with a stable address (private DNS or an internal NLB), open its **UDP/9125** to the runner instances' security group, and set
+the gauge TTL in `statsd_mapping.yml` to a bit above your longest job. Cross-host UDP can drop under load, but that's harmless here — the heartbeat re-sends
+every interval, so a lost packet self-corrects on the next tick.
 
 > **Known limitation:** the job-completed hook doesn't receive a documented
 > job-conclusion variable, so job counters carry no success/failure label yet.
 
 ### Troubleshooting metrics
 
-If Prometheus shows no data, work the pipeline **runner → statsd_exporter →
-Prometheus** from the middle out.
+If Prometheus shows no data, work the pipeline **runner → statsd_exporter → Prometheus** from the middle out.
 
 **Is anything reaching the exporter?** Its own metrics tell you — a non-zero
 `statsd_exporter_udp_packets_total` means datagrams are arriving:
@@ -313,10 +263,8 @@ Prometheus** from the middle out.
 curl -s <exporter>:9102/metrics | grep -E 'udp_packets_total|github_runner'
 ```
 
-**Is the runner even trying to send?** Run it with `-e RUNNER_METRICS_DEBUG=1`.
-Each hook then logs the resolved config and every emit; a `SEND FAILED` line
-means the target host couldn't be resolved/opened (wrong address, or the runner
-can't reach it):
+**Is the runner even trying to send?** Run it with `-e RUNNER_METRICS_DEBUG=1`. Each hook then logs the resolved config and every emit; a `SEND FAILED` line
+means the target host couldn't be resolved/opened (wrong address, or the runner can't reach it):
 
 ```bash
 docker logs <runner> | grep runner-metrics
@@ -331,10 +279,9 @@ docker exec <runner> cat /tmp/runner-metrics.state                   # idle / bu
 docker exec <runner> bash -c 'echo -n test:1\|c > /dev/udp/<host>/<port> && echo OK || echo FAIL'  # can it reach the target?
 ```
 
-**Docker Desktop (macOS/Windows) note:** published **UDP** ports are unreliable
-there, so a host `-p 9125:9125/udp` may silently drop packets. For local
-testing, attach the runner to the exporter's compose network and address it by
-service name (`--network <project>_default -e RUNNER_METRICS_STATSD_ADDR=statsd-exporter:9125`)
+**Docker Desktop (macOS/Windows) note:** published **UDP** ports are unreliable there, so a host `-p 9125:9125/udp` may silently drop packets. For local
+testing, attach the runner to the exporter's compose network and address it by service name
+(`--network <project>_default -e RUNNER_METRICS_STATSD_ADDR=statsd-exporter:9125`)
 instead of `host.docker.internal`. Linux hosts don't have this limitation.
 
 ## Build
@@ -356,8 +303,7 @@ Build args: `GH_RUNNER_VERSION`, `GIT_LFS_VERSION`, `HELM_VERSION`,
 
 ## CVEs left unfixed
 
-The CI gate (`.github/workflows/build.yml`) fails on any fixable Critical, so
-the eliminated cluster cannot silently reappear. The following are accepted
+The CI gate (`.github/workflows/build.yml`) fails on any fixable Critical, so the eliminated cluster cannot silently reappear. The following are accepted
 residuals — those with a fix but no remediation path are ignored in
 [`.grype.yaml`](.grype.yaml), re-audited on every version bump:
 
