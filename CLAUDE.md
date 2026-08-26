@@ -27,7 +27,10 @@ grype docker:hardened-runner:noble -o json | jq '[.matches[].vulnerability.id] |
 bash scan.sh
 ```
 
-There are no unit tests — correctness is validated by `grype` scan and the CI gate in `build.yml`.
+There are no unit tests. Correctness is mostly validated by `grype` scan and the CI gate in `build.yml`; the one exception is
+[`scripts/test/dind-smoke.sh`](scripts/test/dind-smoke.sh), a daemon-level smoke test for the `-dind` variant (does `dockerd` start, does a nested
+`docker run` work, does the `docker-ready.sh` CMD wrapper behave) that `build.yml` runs on the `dind` matrix leg. It cannot cover an actual GitHub Actions
+job through a real runner registration — see [`TODO.md`](TODO.md).
 
 ## Post-build verification
 
@@ -63,7 +66,7 @@ The `ubuntu:noble` final stage:
 | Decision                                                 | Location                          | CVE(s) eliminated                                                |
 |----------------------------------------------------------|-----------------------------------|------------------------------------------------------------------|
 | `gosu` → `setpriv` shim                                  | `scripts/gosu` + Dockerfile       | CVE-2024-24790, CVE-2025-22871, GO-2024-2887, GO-2025-3563       |
-| Docker daemon opt-in (`INSTALL_DOCKER_DAEMON=false`)     | `scripts/install-tools.sh`        | GHSA-p77j-4mvh-x3m3 (grpc in containerd.io)                      |
+| Docker daemon opt-in (`INSTALL_DOCKER_DAEMON=false`)     | `scripts/install-tools.sh`        | containerd/grpc CVE surface (see README "Docker-in-Docker")      |
 | git-lfs source build + forced `x/net`/`x/crypto` bump    | `gitlfs` stage                    | CVE-2025-68121, CVE-2026-27143, GO-2026-4337, GO-2026-5005..5026 |
 | helm from `get.helm.sh` release (not buildkite apt)      | `install-tools.sh` `install_helm` | GO-2026-5005..5026 (`x/net`/`x/crypto` in helm)                  |
 | Node.js from NodeSource (not Ubuntu apt `npm`)           | `install-tools.sh` `install_node` | CVE-2026-33937 (handlebars), CVE-2023-45133 (@babel/traverse)    |
@@ -104,21 +107,65 @@ parsing `_diag/Runner_*.log`. Two constraints are load-bearing: it must preserve
 registration), and the trace must never be set as a plain image-level `ENV` — that would dump every job's HTTP traffic for the runner's whole lifetime.
 The interception works because `entrypoint.sh` invokes `./config.sh` relative to `/actions-runner`, so the wrapper needs no change to any protected file.
 
+### Docker-in-Docker hook (`scripts/hooks/docker-ready.sh`)
+
+CMD wrapper, chained ahead of `runner-run.sh` in the Dockerfile `CMD`
+(`docker-ready.sh` → `runner-run.sh` → `Runner.Listener`). Only does anything
+when `START_DOCKER_SERVICE=true` (the existing var `entrypoint.sh` itself
+checks before running `service docker start`) — otherwise it's a plain
+`exec "$@"`, zero overhead. See README "Docker-in-Docker" for the operator
+docs and [`TODO.md`](TODO.md) for what's still unverified.
+
+Same "wrap, don't patch" reasoning as `config-run.sh`: `entrypoint.sh` already
+starts `dockerd` via `service docker start`, but that call returns as soon as
+the init script forks the daemon, not once it's actually accepting
+connections — a real gap on a cold `/var/lib/docker` (graph-driver init).
+Since `entrypoint.sh` can't be patched, this wrapper polls `docker info`
+(bounded by `DOCKER_READY_TIMEOUT`, default 30s) before handing off to the
+real CMD, and fail-opens with a warning on timeout rather than blocking the
+container forever. It also forks a watcher — the same PID-polling trick
+`runner-run.sh` uses for its offline metric — that runs `service docker stop`
+once the real CMD exits, since nothing else in the container's init tree
+would otherwise flush the daemon on a graceful `docker stop`.
+
 ### CI workflow (`build.yml`)
 
-Single `workflow_dispatch` trigger. Steps in order:
+Triggers on `workflow_dispatch` and on push to `master` touching the
+Dockerfile/scripts/`.grype.yaml`/`.dockerignore`/the workflow itself. Runs as
+a 2-leg matrix (`dind: [false, true]`) so the default and `-dind`
+(`INSTALL_DOCKER_DAEMON=true`) images are built, scanned, and tagged from one
+version/tag source of truth — they can't drift out of sync. Per leg:
 
 1. Compute version tags by grepping `ARG GH_RUNNER_VERSION` from the Dockerfile — the Dockerfile is the **single source of truth** for the runner version.
+   The `dind` leg suffixes every tag with `-dind`.
 2. Build amd64 + load locally (scan requires a local image; `--load` is incompatible with multi-arch).
 3. grype scan with `severity-cutoff: critical` and `only-fixed: true` — only fails the build for fixable Criticals. `anchore/scan-action` auto-reads
    `.grype.yaml` at the repo root for ignore rules (currently the kubectl `GO-2026-5026` residual); each ignore is tracked in the README "CVEs left unfixed"
-   table and must be re-audited on version bumps.
-4. Upload SARIF to GitHub Security tab.
-5. Push multi-arch (`linux/amd64,linux/arm64`) with tags `<ver>-ubuntu-noble`, `ubuntu-noble`, and
-   `<ver>-ubuntu-noble-<short-sha>`.
+   table and must be re-audited on version bumps. As of the last local scan, `INSTALL_DOCKER_DAEMON=true` adds no new fixable Criticals — only High-severity
+   residuals (already tracked in the README table).
+4. Upload SARIF to GitHub Security tab, tagged with a `dind-<bool>` category so the two legs' uploads don't overwrite each other.
+5. Push multi-arch (`linux/amd64,linux/arm64`) with tags `<ver>-ubuntu-noble[-dind]`, `ubuntu-noble[-dind]`, and
+   `<ver>-ubuntu-noble[-dind]-<short-sha>`.
 
 The CI gate does **not** block on High-severity findings — these are tracked in the README "CVEs left unfixed" table and are either unfixable upstream or will
 auto-resolve on the next `apt upgrade` / tool release.
+
+### E2E workflow (`e2e.yaml`)
+
+Runs on PRs touching the Dockerfile/scripts/`.grype.yaml`/`.dockerignore`/itself. Also a matrix, now 2 arches × 2 `dind` states (4 legs total: the `dind`
+axis is crossed with the `arch` `include` list). Grype-scans each leg the same way `build.yml` does and posts/updates one sticky PR comment per leg
+(marker includes the arch+dind suffix so the 4 legs' comments don't collide). Then, unlike `build.yml`, it actually **runs** the built image:
+
+1. Starts the container with `--entrypoint sleep infinity` (skips runner registration — no credentials in this job) and either the host socket mount
+   (default leg) or `--privileged --tmpfs /var/lib/docker` (dind leg — see README "Docker-in-Docker" for why the tmpfs is load-bearing, not cosmetic).
+2. **dind leg only:** `docker exec ... service docker start` and polls `docker info` until ready — this replicates what `entrypoint.sh` /
+   `docker-ready.sh` do on a real deployment, since overriding the entrypoint to `sleep` skips that path entirely.
+3. Checks tool availability (`docker exec ... <tool> --version`), plus `dockerd`/`containerd`/`runc` on the dind leg only.
+4. Runs `docker exec ... docker run --rm alpine:3.20 ...` — proves nested container execution works, via the host socket on the default leg or the
+   container's own freshly-started `dockerd` on the dind leg. Same assertion, different transport.
+
+This is the closest thing in this repo to an actual DinD end-to-end test; what it still cannot cover is a real GitHub Actions job running through an actual
+runner registration (needs live org/repo credentials) — see [`TODO.md`](TODO.md).
 
 ## Versioning
 

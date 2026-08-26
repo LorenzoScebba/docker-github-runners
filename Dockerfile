@@ -219,6 +219,7 @@ RUN chmod +x /token.sh /entrypoint.sh /app_token.sh \
   && rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
 
 ENTRYPOINT ["/entrypoint.sh"]
-# CMD is wrapped by runner-run.sh (transparent unless metrics are enabled) so
-# an idle runner can report itself; it execs the listener below unchanged.
-CMD ["/actions-runner/hooks/runner-run.sh", "./bin/Runner.Listener", "run", "--startuptype", "service"]
+# CMD is wrapped by docker-ready.sh (transparent unless START_DOCKER_SERVICE=
+# true — see the DinD README section) then runner-run.sh (transparent unless
+# metrics are enabled); it execs the listener below unchanged.
+CMD ["/actions-runner/hooks/docker-ready.sh", "/actions-runner/hooks/runner-run.sh", "./bin/Runner.Listener", "run", "--startuptype", "service"]

@@ -49,12 +49,36 @@ longer needed.
   re-confirm the metric still appears after a `GH_RUNNER_VERSION` bump. Failure
   mode is fail-open (no metric, registration untouched).
 
-- [ ] **Full image build + grype scan not yet run end-to-end.** Individual
-  pieces were component-tested (git-lfs compiles with the bump; helm 3.21.2 and
-  NodeSource node 24 binaries are clean), but a complete `docker build` +
-  `grype` of the assembled image has not been executed. Run the `build`
-  workflow (or `bash scan.sh` locally) and confirm zero fixable Criticals before
-  relying on the fix.
+- [x] **Full image build + grype scan not yet run end-to-end.** ~~Individual
+  pieces were component-tested...~~ Done 2026-08-26 for both the default and
+  `-dind` (`INSTALL_DOCKER_DAEMON=true`) images: local `docker build` +
+  `grype` scan of both, plus a daemon-level smoke test of the `-dind` variant
+  (see the item below). The default and `-dind` legs are now both built,
+  scanned, and pushed by `build.yml`'s matrix on every run.
+
+- [ ] **DinD (`INSTALL_DOCKER_DAEMON=true`) verified at the daemon level only,
+  not through a real GitHub Actions job.** Locally confirmed: `dockerd` starts
+  via `service docker start` in this systemd-less base, the new
+  `docker-ready.sh` CMD wrapper (`scripts/hooks/`) correctly waits for
+  readiness and stops the daemon cleanly on shutdown, and a nested
+  `docker run` works **given `--tmpfs /var/lib/docker`** (this image's own
+  rootfs is overlayfs, and `overlay2` cannot layer on overlayfs — confirmed
+  by reproducing the `mount ... fstype: overlay ... invalid argument`
+  failure without it). What's NOT verified: an actual GitHub Actions workflow
+  job running `docker build`/`docker run` steps against a real runner
+  registration — that needs live org/repo credentials this environment
+  doesn't have. Re-audit once someone runs it against a real fleet.
+
+- [ ] **`grype` results for "latest"-pulled tools are timing-sensitive, not
+  just version-sensitive.** While scanning the `-dind` variant, two local
+  builds taken minutes apart showed different Critical/High findings for
+  `crane` and `gh` (both `install-tools.sh` pulls `releases/latest`) purely
+  because each build happened to fetch a different point-in-time release.
+  This is the risk `UPDATING.md` already flags for auto-refreshed components,
+  but it means a **CI run can flip red/green between two runs with an
+  otherwise-identical diff**, not just between version bumps. Consider
+  whether `crane`/`gh` should move to pinned versions (like `HELM_VERSION`)
+  if this causes flaky CI.
 
 ## Notes
 
