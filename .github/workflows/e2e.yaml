@@ -21,33 +21,69 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
+        # Fully explicit 2 arches x 2 dind states = 4 legs. Do NOT split this
+        # into a top-level `dind: [false, true]` key plus a `dind`-less
+        # `include` list — GitHub's include-merge rules apply an include
+        # entry with no overlapping key to EVERY existing combo, so the
+        # second (arm64) entry silently overwrote the first (amd64) for both
+        # dind states and amd64 was never built or scanned (caught via a
+        # real PR run: only 2 jobs total, both arch=arm64).
         include:
           - arch: amd64
             platform: linux/amd64
             runs-on: ubuntu-latest
+            dind: false
+          - arch: amd64
+            platform: linux/amd64
+            runs-on: ubuntu-latest
+            dind: true
           - arch: arm64
             platform: linux/arm64
             runs-on: ubuntu-24.04-arm
+            dind: false
+          - arch: arm64
+            platform: linux/arm64
+            runs-on: ubuntu-24.04-arm
+            dind: true
     steps:
       - uses: actions/checkout@v7
       - uses: docker/setup-buildx-action@v4
 
-      - name: Build (${{ matrix.arch }}, load)
+      # Single source of truth for the tag/container name/PR-comment marker
+      # suffix used throughout this job, so the two dind legs never collide
+      # with each other's images, containers, or sticky comments.
+      - name: Compute names
+        id: vars
+        run: |
+          suffix=""
+          [[ "${{ matrix.dind }}" == "true" ]] && suffix="-dind"
+          echo "suffix=${suffix}" >> "$GITHUB_OUTPUT"
+          echo "tag=hardened-runner:e2e-${{ matrix.arch }}${suffix}" >> "$GITHUB_OUTPUT"
+          echo "container=runner-e2e-${{ matrix.arch }}${suffix}" >> "$GITHUB_OUTPUT"
+
+      # pull: true forces a fresh pull of every FROM image (e.g. the gitlfs
+      # stage's `golang:1`) instead of reusing whatever's pre-cached on the
+      # runner image. Without it, a stale cached golang:1 layer can silently
+      # ship an outdated Go toolchain — defeating the whole point of
+      # rebuilding git-lfs from source to dodge the stdlib CVE cluster.
+      - name: Build (${{ matrix.arch }}${{ matrix.dind && '-dind' || '' }}, load)
         uses: docker/build-push-action@v7
         with:
           context: .
           load: true
+          pull: true
           platforms: ${{ matrix.platform }}
           build-args: |
             INSTALL_CONTAINER_TOOLS=false
-          tags: hardened-runner:e2e-${{ matrix.arch }}
+            INSTALL_DOCKER_DAEMON=${{ matrix.dind }}
+          tags: ${{ steps.vars.outputs.tag }}
 
       - name: Scan with grype
         uses: anchore/scan-action@v7
         id: grype
         continue-on-error: true
         with:
-          image: hardened-runner:e2e-${{ matrix.arch }}
+          image: ${{ steps.vars.outputs.tag }}
           fail-build: true
           severity-cutoff: critical
           only-fixed: true
@@ -57,7 +93,7 @@ jobs:
         id: grype-json
         continue-on-error: true
         with:
-          image: hardened-runner:e2e-${{ matrix.arch }}
+          image: ${{ steps.vars.outputs.tag }}
           fail-build: false
           severity-cutoff: critical
           only-fixed: true
@@ -70,7 +106,7 @@ jobs:
           sarif_file: ${{ steps.grype.outputs.sarif }}
           ref: refs/heads/${{ github.head_ref }}
           sha: ${{ github.event.pull_request.head.sha }}
-          category: grype-${{ matrix.arch }}
+          category: grype-${{ matrix.arch }}${{ steps.vars.outputs.suffix }}
 
       - name: Post scan result as PR comment
         if: always()
@@ -108,8 +144,9 @@ jobs:
                 criticals.map(c => `| ${c.id} | ${c.pkg} | ${c.installed} | ${c.fixed} |`).join('\n')
               : 'No fixable critical CVEs found.';
 
-            const marker = `<!-- e2e-grype-scan:${{ matrix.arch }} -->`;
-            const body = `${marker}\n## ${icon} grype scan (${{ matrix.arch }})\n\n${status}\n\n` +
+            const label = '${{ matrix.arch }}${{ steps.vars.outputs.suffix }}';
+            const marker = `<!-- e2e-grype-scan:${label} -->`;
+            const body = `${marker}\n## ${icon} grype scan (${label})\n\n${status}\n\n` +
               `_Scan ran on \`${{ matrix.platform }}\` with \`severity-cutoff: critical\` and \`only-fixed: true\`. ` +
               `Ignored rules from \`.grype.yaml\` apply. Full results in the Security tab._`;
 
@@ -137,39 +174,84 @@ jobs:
               });
             }
 
+      # The dind leg has no host socket to mount — it needs --privileged and
+      # a non-overlay backing store for /var/lib/docker (this image's own
+      # rootfs is itself overlayfs, and overlay2 can't layer on overlayfs;
+      # see README "Docker-in-Docker"). Both legs override the entrypoint to
+      # skip runner registration (no credentials in this job).
       - name: Start container (override entrypoint, skip registration)
         run: |
-          docker run -d --name runner-e2e-${{ matrix.arch }} \
-            --entrypoint sleep \
-            -v /var/run/docker.sock:/var/run/docker.sock \
-            hardened-runner:e2e-${{ matrix.arch }} infinity
+          if [[ "${{ matrix.dind }}" == "true" ]]; then
+            docker run -d --name ${{ steps.vars.outputs.container }} \
+              --privileged \
+              --tmpfs /var/lib/docker \
+              --entrypoint sleep \
+              ${{ steps.vars.outputs.tag }} infinity
+          else
+            docker run -d --name ${{ steps.vars.outputs.container }} \
+              --entrypoint sleep \
+              -v /var/run/docker.sock:/var/run/docker.sock \
+              ${{ steps.vars.outputs.tag }} infinity
+          fi
+
+      # entrypoint.sh normally starts dockerd itself (START_DOCKER_SERVICE=
+      # true) but that path is skipped here since we override the entrypoint
+      # to `sleep` above — so start it by hand and wait for readiness,
+      # exactly what scripts/hooks/docker-ready.sh does on a real deployment.
+      - name: Start dockerd inside the container (dind only)
+        if: matrix.dind == true
+        run: |
+          docker exec ${{ steps.vars.outputs.container }} service docker start
+          for i in $(seq 1 30); do
+            docker exec ${{ steps.vars.outputs.container }} docker info >/dev/null 2>&1 && exit 0
+            sleep 1
+          done
+          echo "::error::dockerd never became ready"
+          exit 1
 
       - name: Check tool availability
         run: |
           set -e
-          for check in \
-            "aws --version" \
-            "helm version" \
-            "gh --version" \
-            "docker --version" \
-            "yq --version" \
-            "make --version" \
-            "yarn --version" \
-            "chrome --version" \
-            "ffmpeg -version" \
-            "crane version" \
-            "psql --version"; do
+          checks=(
+            "aws --version"
+            "helm version"
+            "gh --version"
+            "docker --version"
+            "yq --version"
+            "make --version"
+            "yarn --version"
+            "chrome --version"
+            "ffmpeg -version"
+            "crane version"
+            "psql --version"
+          )
+          if [[ "${{ matrix.dind }}" == "true" ]]; then
+            checks+=("dockerd --version" "containerd --version" "runc --version")
+          fi
+          for check in "${checks[@]}"; do
             echo "::group::${check}"
-            docker exec runner-e2e-${{ matrix.arch }} sh -c "${check}"
+            docker exec ${{ steps.vars.outputs.container }} sh -c "${check}"
             echo "::endgroup::"
           done
 
+      # Same check either way: it just proves `docker run` works inside the
+      # runner container — via the mounted host socket on the default leg,
+      # via the container's own dockerd (started above) on the dind leg.
       - name: Check container execution (container.image equivalent)
-        run: docker exec runner-e2e-${{ matrix.arch }} docker run --rm alpine:3.20 echo "container execution ok"
+        run: docker exec ${{ steps.vars.outputs.container }} docker run --rm alpine:3.20 echo "container execution ok"
+
+      # docker-ready.sh's own logic (readiness wait, fail-open timeout,
+      # shutdown watcher) is never exercised by the steps above — they
+      # bypass the entrypoint/CMD chain entirely via `--entrypoint sleep`.
+      # This spins up its own throwaway containers from the same image to
+      # test that wrapper directly.
+      - name: Test docker-ready.sh wrapper behavior (dind only)
+        if: matrix.dind == true
+        run: bash scripts/test/dind-smoke.sh ${{ steps.vars.outputs.tag }}
 
       - name: Clean up
         if: always()
-        run: docker rm -f runner-e2e-${{ matrix.arch }} || true
+        run: docker rm -f ${{ steps.vars.outputs.container }} || true
 
       - name: Fail if grype found fixable critical CVEs
         if: steps.grype.outcome == 'failure'

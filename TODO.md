@@ -49,12 +49,72 @@ longer needed.
   re-confirm the metric still appears after a `GH_RUNNER_VERSION` bump. Failure
   mode is fail-open (no metric, registration untouched).
 
-- [ ] **Full image build + grype scan not yet run end-to-end.** Individual
-  pieces were component-tested (git-lfs compiles with the bump; helm 3.21.2 and
-  NodeSource node 24 binaries are clean), but a complete `docker build` +
-  `grype` of the assembled image has not been executed. Run the `build`
-  workflow (or `bash scan.sh` locally) and confirm zero fixable Criticals before
-  relying on the fix.
+- [x] **Full image build + grype scan not yet run end-to-end.** ~~Individual
+  pieces were component-tested...~~ Done 2026-08-26 for both the default and
+  `-dind` (`INSTALL_DOCKER_DAEMON=true`) images: local `docker build` +
+  `grype` scan of both, plus a daemon-level smoke test of the `-dind` variant
+  (see the item below). The default and `-dind` legs are now both built,
+  scanned, and pushed by `build.yml`'s matrix on every run.
+
+- [ ] **DinD (`INSTALL_DOCKER_DAEMON=true`) verified at the daemon level only,
+  not through a real GitHub Actions job.** Locally confirmed: `dockerd` starts
+  via `service docker start` in this systemd-less base, the new
+  `docker-ready.sh` CMD wrapper (`scripts/hooks/`) correctly waits for
+  readiness and stops the daemon cleanly on shutdown, and a nested
+  `docker run` works **given `--tmpfs /var/lib/docker`** (this image's own
+  rootfs is overlayfs, and `overlay2` cannot layer on overlayfs — confirmed
+  by reproducing the `mount ... fstype: overlay ... invalid argument`
+  failure without it). What's NOT verified: an actual GitHub Actions workflow
+  job running `docker build`/`docker run` steps against a real runner
+  registration — that needs live org/repo credentials this environment
+  doesn't have. Re-audit once someone runs it against a real fleet.
+
+- [ ] **`grype` results for "latest"-pulled tools are timing-sensitive, not
+  just version-sensitive.** While scanning the `-dind` variant, two local
+  builds taken minutes apart showed different Critical/High findings for
+  `crane` and `gh` (both `install-tools.sh` pulls `releases/latest`) purely
+  because each build happened to fetch a different point-in-time release.
+  This is the risk `UPDATING.md` already flags for auto-refreshed components,
+  but it means a **CI run can flip red/green between two runs with an
+  otherwise-identical diff**, not just between version bumps. Consider
+  whether `crane`/`gh` should move to pinned versions (like `HELM_VERSION`)
+  if this causes flaky CI.
+
+- [x] **`e2e.yaml`'s `dind: [false, true]` + `include:` matrix silently
+  collapsed to 2 jobs instead of 4, and never built/scanned amd64.** Caught
+  from a real PR run (#14): the API showed only `e2e (false)`/`e2e (true)`,
+  and both sticky PR comments read `arch=arm64`. Root cause: neither
+  `include` entry set `dind`, so per GitHub's matrix-merge rules each entry
+  (with no overlapping key) applied to *every* `dind` combo — the second
+  entry (arm64) silently overwrote the first (amd64) for both dind states.
+  Fixed 2026-08-26 by making the matrix a single fully-explicit 4-item
+  `include:` list (no separate top-level `dind` key). Re-audit if the matrix
+  is ever restructured again — this class of bug produces no error, just
+  silently-missing coverage.
+
+- [x] **`crane`'s prebuilt release binary carries the 2026 stdlib CVE
+  cluster; `pull: true` was added but does NOT fix this (initial diagnosis
+  was wrong — kept here corrected, not deleted).** PR #14's run flagged
+  `GO-2026-4337`/`CVE-2025-68121`/`CVE-2026-27143` in `stdlib go1.25.0` —
+  first assumed to be the `gitlfs` stage's `golang:1` base going stale on
+  the runner, so `pull: true` was added to every `docker/build-push-action`
+  step (still worth keeping, general hardening against base-image
+  staleness). But a full local build + `grype` scan of the actual image
+  showed the finding's location is `/usr/local/bin/crane`, not `git-lfs` —
+  `git-lfs version` confirms `go 1.27.0` embedded, so the gitlfs stage is
+  fine. `install_crane()` (`scripts/install-tools.sh`) always fetches
+  upstream's `releases/latest`; as of `v0.22.0` (2026-08-25, confirmed via
+  the GitHub API to be the actual latest tag), no `go-containerregistry`
+  release yet embeds a patched Go — this is a genuine upstream gap, not a
+  CI staleness bug. Fixed 2026-08-26 by adding a location-scoped
+  (`/usr/local/bin/crane`) ignore for all three IDs in
+  [`.grype.yaml`](.grype.yaml) + a README "CVEs left unfixed" row; verified
+  the CI-equivalent `grype` invocation (`--fail-on critical --only-fixed`)
+  exits 0 against a real build with the ignore in place, and that the ignore
+  only matches the crane path (confirmed via `ignoredMatches` in JSON
+  output), so a future stdlib regression elsewhere (e.g. git-lfs) won't be
+  silently masked. Re-audit and drop the ignore once go-containerregistry
+  cuts a release built with a fixed Go toolchain.
 
 ## Notes
 

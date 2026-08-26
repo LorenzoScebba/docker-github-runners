@@ -23,6 +23,10 @@ jobs:
       contents: read
       packages: write
       security-events: write
+    strategy:
+      fail-fast: false
+      matrix:
+        dind: [false, true]
     steps:
       - uses: actions/checkout@v7
       - uses: docker/setup-qemu-action@v4
@@ -36,6 +40,11 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # Same runner version and tag scheme as the default image, with a
+      # `-dind` suffix for the docker-in-docker variant (INSTALL_DOCKER_DAEMON
+      # =true — see README "Docker-in-Docker"). Kept in the same job as a
+      # matrix, not a separate workflow, so both variants share one
+      # version/tag source of truth and can never drift out of sync.
       - name: Compute version and tags
         id: meta
         run: |
@@ -44,18 +53,26 @@ jobs:
           image="ghcr.io/${{ github.repository }}"
           image="${image,,}"
           short_sha="${GITHUB_SHA:0:7}"
-          echo "tags=${image}:${ver}-ubuntu-noble,${image}:ubuntu-noble,${image}:${ver}-ubuntu-noble-${short_sha}" >> "$GITHUB_OUTPUT"
-          echo "scan_tag=${image}:scan-${{ github.sha }}" >> "$GITHUB_OUTPUT"
+          suffix=""
+          [[ "${{ matrix.dind }}" == "true" ]] && suffix="-dind"
+          echo "tags=${image}:${ver}-ubuntu-noble${suffix},${image}:ubuntu-noble${suffix},${image}:${ver}-ubuntu-noble${suffix}-${short_sha}" >> "$GITHUB_OUTPUT"
+          echo "scan_tag=${image}:scan${suffix}-${{ github.sha }}" >> "$GITHUB_OUTPUT"
 
       # Build amd64 locally first so we can scan it before publishing.
+      # pull: true forces a fresh pull of every FROM image (e.g. the gitlfs
+      # stage's `golang:1`) instead of reusing whatever's pre-cached on the
+      # runner image — a stale cached base can silently ship an outdated Go
+      # toolchain and defeat the from-source rebuild's whole CVE rationale.
       - name: Build (amd64, load for scan)
         uses: docker/build-push-action@v7
         with:
           context: .
           load: true
+          pull: true
           platforms: linux/amd64
           build-args: |
             INSTALL_CONTAINER_TOOLS=false
+            INSTALL_DOCKER_DAEMON=${{ matrix.dind }}
           tags: ${{ steps.meta.outputs.scan_tag }}
 
       - name: Scan with grype (distinct CVEs)
@@ -72,11 +89,15 @@ jobs:
         if: always()
         run: cat ${{ steps.grype.outputs.sarif }}
 
+      # category disambiguates the two matrix legs' SARIF uploads — without
+      # it the dind leg's upload would overwrite the default leg's in the
+      # Security tab (both run for the same commit).
       - name: upload Anchore scan SARIF report
         if: always()
         uses: github/codeql-action/upload-sarif@v4
         with:
           sarif_file: ${{ steps.grype.outputs.sarif }}
+          category: dind-${{ matrix.dind }}
 
       - name: Fail if grype found fixable critical CVEs
         if: steps.grype.outcome == 'failure'
@@ -90,7 +111,9 @@ jobs:
         with:
           context: .
           push: true
+          pull: true
           platforms: linux/amd64,linux/arm64
           build-args: |
             INSTALL_CONTAINER_TOOLS=false
+            INSTALL_DOCKER_DAEMON=${{ matrix.dind }}
           tags: ${{ steps.meta.outputs.tags }}

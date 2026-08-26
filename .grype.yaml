@@ -26,3 +26,25 @@ ignore:
   - vulnerability: GHSA-23hp-3jrh-7fpw
     package:
       name: tar
+
+  # crane (google/go-containerregistry) ships a prebuilt release binary built
+  # against a Go stdlib that carries the 2026 CVE cluster (GO-2026-4337,
+  # CVE-2025-68121, CVE-2026-27143 — same cluster the gitlfs stage rebuilds
+  # git-lfs from source to dodge). install_crane() in install-tools.sh always
+  # fetches upstream's `releases/latest`; as of v0.22.0 (2026-08-25, the
+  # newest tag at the time this was found) no release yet embeds a patched
+  # Go. location-scoped to the crane binary specifically so a future stdlib
+  # regression elsewhere (e.g. git-lfs) isn't silently masked. Drop once
+  # go-containerregistry cuts a release built with a fixed Go toolchain.
+  - vulnerability: GO-2026-4337
+    package:
+      name: stdlib
+      location: "/usr/local/bin/crane"
+  - vulnerability: CVE-2025-68121
+    package:
+      name: stdlib
+      location: "/usr/local/bin/crane"
+  - vulnerability: CVE-2026-27143
+    package:
+      name: stdlib
+      location: "/usr/local/bin/crane"
