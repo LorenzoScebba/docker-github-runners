@@ -23,6 +23,14 @@ jobs:
       contents: read
       packages: write
       security-events: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - suffix: ''
+            install_docker_daemon: 'false'
+          - suffix: '-dind'
+            install_docker_daemon: 'true'
     steps:
       - uses: actions/checkout@v7
       - uses: docker/setup-qemu-action@v4
@@ -44,8 +52,9 @@ jobs:
           image="ghcr.io/${{ github.repository }}"
           image="${image,,}"
           short_sha="${GITHUB_SHA:0:7}"
-          echo "tags=${image}:${ver}-ubuntu-noble,${image}:ubuntu-noble,${image}:${ver}-ubuntu-noble-${short_sha}" >> "$GITHUB_OUTPUT"
-          echo "scan_tag=${image}:scan-${{ github.sha }}" >> "$GITHUB_OUTPUT"
+          suffix="${{ matrix.suffix }}"
+          echo "tags=${image}:${ver}-ubuntu-noble${suffix},${image}:ubuntu-noble${suffix},${image}:${ver}-ubuntu-noble-${short_sha}${suffix}" >> "$GITHUB_OUTPUT"
+          echo "scan_tag=${image}:scan-${{ github.sha }}${suffix}" >> "$GITHUB_OUTPUT"
 
       # Build amd64 locally first so we can scan it before publishing.
       - name: Build (amd64, load for scan)
@@ -56,6 +65,7 @@ jobs:
           platforms: linux/amd64
           build-args: |
             INSTALL_CONTAINER_TOOLS=false
+            INSTALL_DOCKER_DAEMON=${{ matrix.install_docker_daemon }}
           tags: ${{ steps.meta.outputs.scan_tag }}
 
       - name: Scan with grype (distinct CVEs)
@@ -77,6 +87,7 @@ jobs:
         uses: github/codeql-action/upload-sarif@v4
         with:
           sarif_file: ${{ steps.grype.outputs.sarif }}
+          category: grype${{ matrix.suffix }}
 
       - name: Fail if grype found fixable critical CVEs
         if: steps.grype.outcome == 'failure'
@@ -93,4 +104,5 @@ jobs:
           platforms: linux/amd64,linux/arm64
           build-args: |
             INSTALL_CONTAINER_TOOLS=false
+            INSTALL_DOCKER_DAEMON=${{ matrix.install_docker_daemon }}
           tags: ${{ steps.meta.outputs.tags }}
