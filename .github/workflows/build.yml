@@ -59,11 +59,16 @@ jobs:
           echo "scan_tag=${image}:scan${suffix}-${{ github.sha }}" >> "$GITHUB_OUTPUT"
 
       # Build amd64 locally first so we can scan it before publishing.
+      # pull: true forces a fresh pull of every FROM image (e.g. the gitlfs
+      # stage's `golang:1`) instead of reusing whatever's pre-cached on the
+      # runner image — a stale cached base can silently ship an outdated Go
+      # toolchain and defeat the from-source rebuild's whole CVE rationale.
       - name: Build (amd64, load for scan)
         uses: docker/build-push-action@v7
         with:
           context: .
           load: true
+          pull: true
           platforms: linux/amd64
           build-args: |
             INSTALL_CONTAINER_TOOLS=false
@@ -106,6 +111,7 @@ jobs:
         with:
           context: .
           push: true
+          pull: true
           platforms: linux/amd64,linux/arm64
           build-args: |
             INSTALL_CONTAINER_TOOLS=false

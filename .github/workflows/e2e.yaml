@@ -21,18 +21,30 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # Crossed with `include` below: 2 arches x 2 dind states = 4 legs.
-        # The dind leg builds with INSTALL_DOCKER_DAEMON=true and exercises
-        # container execution via its own `dockerd` instead of the host
-        # socket mount — see README "Docker-in-Docker".
-        dind: [false, true]
+        # Fully explicit 2 arches x 2 dind states = 4 legs. Do NOT split this
+        # into a top-level `dind: [false, true]` key plus a `dind`-less
+        # `include` list — GitHub's include-merge rules apply an include
+        # entry with no overlapping key to EVERY existing combo, so the
+        # second (arm64) entry silently overwrote the first (amd64) for both
+        # dind states and amd64 was never built or scanned (caught via a
+        # real PR run: only 2 jobs total, both arch=arm64).
         include:
           - arch: amd64
             platform: linux/amd64
             runs-on: ubuntu-latest
+            dind: false
+          - arch: amd64
+            platform: linux/amd64
+            runs-on: ubuntu-latest
+            dind: true
           - arch: arm64
             platform: linux/arm64
             runs-on: ubuntu-24.04-arm
+            dind: false
+          - arch: arm64
+            platform: linux/arm64
+            runs-on: ubuntu-24.04-arm
+            dind: true
     steps:
       - uses: actions/checkout@v7
       - uses: docker/setup-buildx-action@v4
@@ -49,11 +61,17 @@ jobs:
           echo "tag=hardened-runner:e2e-${{ matrix.arch }}${suffix}" >> "$GITHUB_OUTPUT"
           echo "container=runner-e2e-${{ matrix.arch }}${suffix}" >> "$GITHUB_OUTPUT"
 
+      # pull: true forces a fresh pull of every FROM image (e.g. the gitlfs
+      # stage's `golang:1`) instead of reusing whatever's pre-cached on the
+      # runner image. Without it, a stale cached golang:1 layer can silently
+      # ship an outdated Go toolchain — defeating the whole point of
+      # rebuilding git-lfs from source to dodge the stdlib CVE cluster.
       - name: Build (${{ matrix.arch }}${{ matrix.dind && '-dind' || '' }}, load)
         uses: docker/build-push-action@v7
         with:
           context: .
           load: true
+          pull: true
           platforms: ${{ matrix.platform }}
           build-args: |
             INSTALL_CONTAINER_TOOLS=false

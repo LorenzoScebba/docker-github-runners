@@ -80,6 +80,42 @@ longer needed.
   whether `crane`/`gh` should move to pinned versions (like `HELM_VERSION`)
   if this causes flaky CI.
 
+- [x] **`e2e.yaml`'s `dind: [false, true]` + `include:` matrix silently
+  collapsed to 2 jobs instead of 4, and never built/scanned amd64.** Caught
+  from a real PR run (#14): the API showed only `e2e (false)`/`e2e (true)`,
+  and both sticky PR comments read `arch=arm64`. Root cause: neither
+  `include` entry set `dind`, so per GitHub's matrix-merge rules each entry
+  (with no overlapping key) applied to *every* `dind` combo — the second
+  entry (arm64) silently overwrote the first (amd64) for both dind states.
+  Fixed 2026-08-26 by making the matrix a single fully-explicit 4-item
+  `include:` list (no separate top-level `dind` key). Re-audit if the matrix
+  is ever restructured again — this class of bug produces no error, just
+  silently-missing coverage.
+
+- [x] **`crane`'s prebuilt release binary carries the 2026 stdlib CVE
+  cluster; `pull: true` was added but does NOT fix this (initial diagnosis
+  was wrong — kept here corrected, not deleted).** PR #14's run flagged
+  `GO-2026-4337`/`CVE-2025-68121`/`CVE-2026-27143` in `stdlib go1.25.0` —
+  first assumed to be the `gitlfs` stage's `golang:1` base going stale on
+  the runner, so `pull: true` was added to every `docker/build-push-action`
+  step (still worth keeping, general hardening against base-image
+  staleness). But a full local build + `grype` scan of the actual image
+  showed the finding's location is `/usr/local/bin/crane`, not `git-lfs` —
+  `git-lfs version` confirms `go 1.27.0` embedded, so the gitlfs stage is
+  fine. `install_crane()` (`scripts/install-tools.sh`) always fetches
+  upstream's `releases/latest`; as of `v0.22.0` (2026-08-25, confirmed via
+  the GitHub API to be the actual latest tag), no `go-containerregistry`
+  release yet embeds a patched Go — this is a genuine upstream gap, not a
+  CI staleness bug. Fixed 2026-08-26 by adding a location-scoped
+  (`/usr/local/bin/crane`) ignore for all three IDs in
+  [`.grype.yaml`](.grype.yaml) + a README "CVEs left unfixed" row; verified
+  the CI-equivalent `grype` invocation (`--fail-on critical --only-fixed`)
+  exits 0 against a real build with the ignore in place, and that the ignore
+  only matches the crane path (confirmed via `ignoredMatches` in JSON
+  output), so a future stdlib regression elsewhere (e.g. git-lfs) won't be
+  silently masked. Re-audit and drop the ignore once go-containerregistry
+  cuts a release built with a fixed Go toolchain.
+
 ## Notes
 
 - The CI gate (`build.yml`) only blocks on **fixable Criticals**. High-severity
