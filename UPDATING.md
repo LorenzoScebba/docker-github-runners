@@ -14,9 +14,9 @@ How to upgrade the components baked into this image. Two categories:
 | Component                    | Where                                                                                                            | Default                    |
 |------------------------------|------------------------------------------------------------------------------------------------------------------|----------------------------|
 | GitHub Actions runner        | `GH_RUNNER_VERSION` in [`Dockerfile`](Dockerfile)                                                                | `2.338.2`                  |
-| git-lfs                      | `GIT_LFS_VERSION` in [`Dockerfile`](Dockerfile) (`gitlfs` stage)                                                 | `3.7.1`                    |
-| git-lfs `x/net` / `x/crypto` | `GO_X_NET_VERSION` / `GO_X_CRYPTO_VERSION` in [`Dockerfile`](Dockerfile) (`gitlfs` stage)                        | `v0.55.0` / `v0.53.0`      |
-| helm                         | `HELM_VERSION` in [`Dockerfile`](Dockerfile)                                                                     | `3.21.2`                   |
+| git-lfs                      | `GIT_LFS_VERSION` in [`Dockerfile`](Dockerfile) (`gitlfs` stage)                                                 | `3.8.1`                    |
+| git-lfs `x/net` / `x/crypto` | `GO_X_NET_VERSION` / `GO_X_CRYPTO_VERSION` in [`Dockerfile`](Dockerfile) (`gitlfs` stage)                        | `v0.60.0` / `v0.57.0`      |
+| helm                         | `HELM_VERSION` in [`Dockerfile`](Dockerfile)                                                                     | `3.22.1`                   |
 | Node.js (major)              | `NODE_MAJOR` in [`Dockerfile`](Dockerfile) (NodeSource repo)                                                     | `24` (LTS)                 |
 | kubectl (minor)              | `KUBECTL_MINOR_VERSION` in [`Dockerfile`](Dockerfile)                                                            | `1.35`                     |
 | Ubuntu base                  | `FROM ubuntu:noble` in [`Dockerfile`](Dockerfile)                                                                | `noble` (24.04 LTS)        |

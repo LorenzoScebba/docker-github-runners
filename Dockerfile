@@ -13,14 +13,14 @@
 # Go, CGO off) — no QEMU.
 #
 # We also force-upgrade golang.org/x/net and golang.org/x/crypto: git-lfs
-# v3.7.1's go.mod pins x/net v0.38.0 / x/crypto v0.36.0, which carry the 2026
-# critical advisory batch (GO-2026-5005..5026, idna/ssh). main has the bump but
-# no tagged release ships it, so we `go get` the fixed versions before building.
+# release tags lag on these. v3.8.1's go.mod pins x/net v0.57.0, which still
+# carries GO-2026-6612 (fixed in v0.60.0); earlier tags carried the 2026
+# GO-2026-5005..5026 batch. So we `go get` the fixed versions before building.
 # ---------------------------------------------------------------------------
 FROM --platform=$BUILDPLATFORM golang:1 AS gitlfs
-ARG GIT_LFS_VERSION="3.7.1"
-ARG GO_X_NET_VERSION="v0.55.0"
-ARG GO_X_CRYPTO_VERSION="v0.53.0"
+ARG GIT_LFS_VERSION="3.8.1"
+ARG GO_X_NET_VERSION="v0.60.0"
+ARG GO_X_CRYPTO_VERSION="v0.57.0"
 ARG TARGETOS
 ARG TARGETARCH
 ENV CGO_ENABLED=0
@@ -68,7 +68,7 @@ ARG KUBECTL_MINOR_VERSION="1.35"
 # lags and ships a helm built against the vulnerable x/net/x/crypto). 3.21.2 is
 # the first helm 3.x with the fixed deps. Node.js comes from NodeSource — the
 # Ubuntu apt npm drags in a stale Debian node-* tree (handlebars/babel CVEs).
-ARG HELM_VERSION="3.21.2"
+ARG HELM_VERSION="3.22.1"
 ARG NODE_MAJOR="24"
 
 ARG RUNNER_UID="1001"
