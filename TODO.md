@@ -8,30 +8,20 @@ longer needed.
 
 ## Open — re-audit and remove when upstream catches up
 
-- [ ] **kubectl `GO-2026-5026` (`x/net/idna`, Critical) — ignored in [`.grype.yaml`](.grype.yaml).**
-  No kubernetes release ships `golang.org/x/net >= v0.55.0` yet (even `v1.36.2`
-  pins `v0.49.0`). When a release bundles the fixed `x/net`: bump
-  `KUBECTL_MINOR_VERSION` in the [`Dockerfile`](Dockerfile), delete the ignore
-  rule in `.grype.yaml`, and drop the row from the README "CVEs left unfixed"
-  table. **Check:** `curl -fsSL https://raw.githubusercontent.com/kubernetes/kubernetes/v<ver>/go.mod | grep 'golang.org/x/net'`
-
 - [ ] **git-lfs forced `x/net`/`x/crypto` bump (`gitlfs` stage in [`Dockerfile`](Dockerfile)).**
   `GO_X_NET_VERSION` / `GO_X_CRYPTO_VERSION` are force-`go get`'d because the
   git-lfs source tag still pins the vulnerable versions. Once a git-lfs release
-  pins `x/net >= v0.55.0` / `x/crypto >= v0.53.0` natively, the `go get` becomes
+  pins `x/net >= v0.60.0` / `x/crypto >= v0.57.0` natively (pins raised
+  2026-11-03 for `GO-2026-6612`; git-lfs `v3.8.1` itself pins `x/net v0.57.0`), the `go get` becomes
   a no-op and can be removed (revert to a plain build). Bump the pins instead if
   a newer advisory raises the fixed floor. **Check:** compare the pins against
   the git-lfs tag's `go.mod`.
 
-- [ ] **helm release floor (`HELM_VERSION` in [`Dockerfile`](Dockerfile), default `3.21.2`).**
+- [ ] **helm release floor (`HELM_VERSION` in [`Dockerfile`](Dockerfile), default `3.22.1`).**
   Pulled from `get.helm.sh` because the buildkite apt repo lags. Staying on
   helm 3.x by choice (avoids helm 4 breaking changes). On bump, confirm the new
-  version's `go.mod` still has `x/net >= v0.55.0` / `x/crypto >= v0.52.0`.
-
-- [ ] **`CVE-2026-6100` (Critical) — python `3.14.5` bundled in aws-cli v2.**
-  No patched python ships upstream yet; grype reports no fixed version so it
-  does not fail the gate (`only-fixed: true`). Re-check on rebuild whether a
-  fixed aws-cli/python is available.
+  version's `go.mod` still has `x/net >= v0.60.0` (`GO-2026-6612`) /
+  `x/crypto >= v0.57.0`.
 
 - [ ] **`GHSA-23hp-3jrh-7fpw` (Critical, node-tar Gzip Bomb DoS) — ignored in
   [`.grype.yaml`](.grype.yaml) as an accepted risk, not a remediation gap.**
@@ -39,6 +29,26 @@ longer needed.
   contributors/forks, or drop the ignore once `actions/runner`'s node20
   externals move past npm 10.8.2 (pinned to `tar ^6.2.1`, no patched 6.x
   release exists).
+
+- [ ] **Prebuilt-binary Criticals with no upstream fix yet (2026-11-03) — all
+  ignored in [`.grype.yaml`](.grype.yaml), location-scoped per binary.** Every
+  affected tool was already on its latest release when checked. Drop each rule
+  (and its README row) once the named upstream ships the fix:
+  - `GO-2026-6612` (`x/net` < `v0.60.0`): **kubectl** (1.35.10 → `v0.56.0`; no
+    k8s release incl. `v1.37.2` pins `>= v0.60.0` — bump `KUBECTL_MINOR_VERSION`
+    once one does), **docker-buildx** 0.38.1 and **yq** v4.54.1 (`v0.59.0`),
+    and in the `-dind` image **containerd/ctr/containerd-shim-runc-v2** 2.4.2
+    (`v0.58.0`) and **runc** 1.5.2 (`v0.55.0`).
+    **Check:** `curl -fsSL https://raw.githubusercontent.com/<org>/<repo>/<tag>/go.mod | grep 'golang.org/x/net '`
+  - Go stdlib `CVE-2026-78663` / `GO-2026-6604` / `GO-2026-6612` (fixed in
+    go`1.26.9`/`1.27.2`): **crane** v0.22.1 (go1.26.6) and **yq** v4.54.1
+    (go1.27.1). (Replaces the earlier crane-only `GO-2026-4337` /
+    `CVE-2025-68121` / `CVE-2026-27143` ignores, cleared by crane v0.22.1.)
+    **Check:** `grype <img> -o json | jq -r '.matches[] | select(.artifact.name=="stdlib") | .artifact.version + " " + .artifact.locations[0].path' | sort -u`
+  - `CVE-2026-111497`: node 20.20.2 in the **actions/runner** tarball's
+    `externals/node20` (runner 2.338.2). Clears on a runner release that bumps it.
+  - `CVE-2026-115557`: python 3.14.8 bundled in **aws-cli** 2.39.3 (fixed in
+    3.14.10). Clears once aws-cli rebundles.
 
 ## Verification still owed
 
@@ -115,6 +125,13 @@ longer needed.
   output), so a future stdlib regression elsewhere (e.g. git-lfs) won't be
   silently masked. Re-audit and drop the ignore once go-containerregistry
   cuts a release built with a fixed Go toolchain.
+
+- [x] **kubectl `GO-2026-5026` and aws-cli `CVE-2026-6100` cleared
+  2026-11-03.** kubectl 1.35.10 now ships `x/net v0.56.0` (>= the `v0.55.0`
+  fix) and aws-cli 2.39.3 bundles python 3.14.8 (past `CVE-2026-6100`,
+  `CVE-2026-3298`, `CVE-2026-4786`). The kubectl `.grype.yaml` ignore and both
+  README rows were removed; confirmed absent from a fresh local scan of both
+  image variants.
 
 ## Notes
 

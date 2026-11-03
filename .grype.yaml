@@ -5,15 +5,6 @@
 # finding that cannot be remediated yet and is tracked in the README
 # "CVEs left unfixed" table. Re-audit on every version bump (see UPDATING.md).
 ignore:
-  # kubectl ships a vulnerable golang.org/x/net (idna confusion, GO-2026-5026,
-  # fixed in x/net v0.55.0). No kubernetes release carries the bump yet — even
-  # v1.36.2 pins x/net v0.49.0 — and building kubectl from source with a forced
-  # bump is impractical. helm and git-lfs already ship the fixed x/net, so this
-  # rule only matches the kubectl binary. Drop it once k8s bumps x/net >= 0.55.0.
-  - vulnerability: GO-2026-5026
-    package:
-      name: golang.org/x/net
-
   # node-tar Gzip Bomb decompression DoS (GHSA-23hp-3jrh-7fpw / CVE-2026-59873, Critical,
   # fixed in tar@7.5.19). Bundled 3x: NodeSource's system npm and the actions/runner
   # tarball's node20/node24 externals. Accepted risk, not a remediation-path gap: this is a
@@ -27,24 +18,87 @@ ignore:
     package:
       name: tar
 
-  # crane (google/go-containerregistry) ships a prebuilt release binary built
-  # against a Go stdlib that carries the 2026 CVE cluster (GO-2026-4337,
-  # CVE-2025-68121, CVE-2026-27143 — same cluster the gitlfs stage rebuilds
-  # git-lfs from source to dodge). install_crane() in install-tools.sh always
-  # fetches upstream's `releases/latest`; as of v0.22.0 (2026-08-25, the
-  # newest tag at the time this was found) no release yet embeds a patched
-  # Go. location-scoped to the crane binary specifically so a future stdlib
-  # regression elsewhere (e.g. git-lfs) isn't silently masked. Drop once
-  # go-containerregistry cuts a release built with a fixed Go toolchain.
-  - vulnerability: GO-2026-4337
+  # node 20.20.2 (CVE-2026-111497, Critical) bundled in the actions/runner tarball's
+  # node20 externals. Not ours to patch — the externals ship pinned inside the runner
+  # release, and 2.338.2 (latest as of 2026-11-03) still ships node 20.20.2. Our own
+  # system node (NodeSource, NODE_MAJOR=24) is already on a fixed 24.22.x. Drop once an
+  # actions/runner release bundles node20 >= a fixed version (or drops node20 entirely).
+  - vulnerability: CVE-2026-111497
+    package:
+      name: node
+      location: "/actions-runner/externals/node20/bin/node"
+
+  # python 3.14.8 (CVE-2026-115557, Critical, fixed in 3.14.10) embedded in aws-cli v2's
+  # frozen bundle. install_aws_cli() always fetches the latest installer; as of 2.39.3
+  # (latest on 2026-11-03) AWS still bundles 3.14.8. Location glob covers the versioned
+  # dist dir so the rule survives aws-cli patch bumps. Drop once aws-cli bundles >= 3.14.10.
+  - vulnerability: CVE-2026-115557
+    package:
+      name: python
+      location: "/usr/local/aws-cli/v2/*/dist/libpython3.14.so.1.0"
+
+  # Go stdlib CVE-2026-78663 / GO-2026-6604 / GO-2026-6612 (Critical, fixed in go1.26.9 /
+  # go1.27.2) embedded in prebuilt release binaries fetched from `releases/latest`:
+  # crane v0.22.1 (go1.26.6) and yq v4.54.1 (go1.27.1) — both the newest tags as of
+  # 2026-11-03. Location-scoped so a stdlib regression in something we build ourselves
+  # (git-lfs) is never masked. Drop per-binary once upstream cuts a release with a fixed Go.
+  - vulnerability: CVE-2026-78663
     package:
       name: stdlib
       location: "/usr/local/bin/crane"
-  - vulnerability: CVE-2025-68121
+  - vulnerability: GO-2026-6604
     package:
       name: stdlib
       location: "/usr/local/bin/crane"
-  - vulnerability: CVE-2026-27143
+  - vulnerability: GO-2026-6612
     package:
       name: stdlib
       location: "/usr/local/bin/crane"
+  - vulnerability: CVE-2026-78663
+    package:
+      name: stdlib
+      location: "/usr/local/bin/yq"
+  - vulnerability: GO-2026-6604
+    package:
+      name: stdlib
+      location: "/usr/local/bin/yq"
+  - vulnerability: GO-2026-6612
+    package:
+      name: stdlib
+      location: "/usr/local/bin/yq"
+
+  # golang.org/x/net GO-2026-6612 (Critical, fixed in v0.60.0) vendored into binaries we
+  # don't build, all already on their latest release as of 2026-11-03:
+  #   kubectl 1.35.10 (x/net v0.56.0; no k8s release incl. v1.37.2 pins >= v0.60.0),
+  #   docker-buildx 0.38.1 / yq v4.54.1 (v0.59.0),
+  #   containerd.io 2.4.2 — containerd/ctr/shim (v0.58.0) and runc 1.5.2 (v0.55.0) —
+  #   these four only exist in the -dind (INSTALL_DOCKER_DAEMON=true) image.
+  # Location-scoped per binary. Drop each once its upstream release pins x/net >= v0.60.0.
+  - vulnerability: GO-2026-6612
+    package:
+      name: golang.org/x/net
+      location: "/usr/bin/kubectl"
+  - vulnerability: GO-2026-6612
+    package:
+      name: golang.org/x/net
+      location: "/usr/libexec/docker/cli-plugins/docker-buildx"
+  - vulnerability: GO-2026-6612
+    package:
+      name: golang.org/x/net
+      location: "/usr/local/bin/yq"
+  - vulnerability: GO-2026-6612
+    package:
+      name: golang.org/x/net
+      location: "/usr/bin/containerd"
+  - vulnerability: GO-2026-6612
+    package:
+      name: golang.org/x/net
+      location: "/usr/bin/containerd-shim-runc-v2"
+  - vulnerability: GO-2026-6612
+    package:
+      name: golang.org/x/net
+      location: "/usr/bin/ctr"
+  - vulnerability: GO-2026-6612
+    package:
+      name: golang.org/x/net
+      location: "/usr/bin/runc"
