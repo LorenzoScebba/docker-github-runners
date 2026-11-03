@@ -13,7 +13,7 @@ How to upgrade the components baked into this image. Two categories:
 
 | Component                    | Where                                                                                                            | Default                    |
 |------------------------------|------------------------------------------------------------------------------------------------------------------|----------------------------|
-| GitHub Actions runner        | `GH_RUNNER_VERSION` in [`Dockerfile`](Dockerfile)                                                                | `2.335.1`                  |
+| GitHub Actions runner        | `GH_RUNNER_VERSION` in [`Dockerfile`](Dockerfile)                                                                | `2.338.2`                  |
 | git-lfs                      | `GIT_LFS_VERSION` in [`Dockerfile`](Dockerfile) (`gitlfs` stage)                                                 | `3.7.1`                    |
 | git-lfs `x/net` / `x/crypto` | `GO_X_NET_VERSION` / `GO_X_CRYPTO_VERSION` in [`Dockerfile`](Dockerfile) (`gitlfs` stage)                        | `v0.55.0` / `v0.53.0`      |
 | helm                         | `HELM_VERSION` in [`Dockerfile`](Dockerfile)                                                                     | `3.21.2`                   |

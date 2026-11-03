@@ -50,7 +50,7 @@ SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
 # Runner version and identity. Bumping GH_RUNNER_VERSION also refreshes the
 # npm deps bundled under /actions-runner/externals (fix #4).
-ARG GH_RUNNER_VERSION="2.336.0"
+ARG GH_RUNNER_VERSION="2.338.2"
 ARG TARGETPLATFORM
 ARG TARGETARCH
 
